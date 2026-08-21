@@ -1,0 +1,178 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  REVIEWER
+  VIEWER
+}
+enum ProjectStatus {
+  IMPORTING
+  PENDING_GENERATION
+  INCOMPLETE_MATRIX
+  GENERATING
+  READY_FOR_REVIEW
+  FAILED
+}
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id String @id @default(cuid())
+  username String @unique
+  passwordHash String
+  role Role @default(REVIEWER)
+  refreshTokens RefreshToken[]
+  reviews Review[]
+  createdAt DateTime @default(now())
+}
+model RefreshToken {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  userId String
+  expiresAt DateTime
+  revokedAt DateTime?
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+}
+model Project {
+  id String @id @default(cuid())
+  name String
+  status ProjectStatus @default(IMPORTING)
+  workspacePath String @unique
+  missingArtifacts Json?
+  documents Document[]
+  testRequirementNodes TestRequirementNode[]
+  traceLinks TraceLink[]
+  runs Phase2Run[]
+  reviews Review[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model Document {
+  id String @id @default(cuid())
+  projectId String
+  name String
+  objectKey String
+  outline Json?
+  fileHash String?
+  parseStatus String @default("PENDING")
+  parseError String?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  nodes DocumentNode[]
+}
+model DocumentNode {
+  id String @id @default(cuid())
+  documentId String
+  sourceRef String
+  nodeType String @default("heading")
+  number String?
+  title String
+  text String?
+  level Int
+  parentId String?
+  orderIndex Int
+  paragraphIndex Int?
+  paraId String?
+  textHash String?
+  headingPath Json?
+  document Document @relation(fields:[documentId], references:[id], onDelete:Cascade)
+  parent DocumentNode? @relation("DocumentNodeTree", fields:[parentId], references:[id], onDelete:SetNull)
+  children DocumentNode[] @relation("DocumentNodeTree")
+  outgoingLinks TraceLink[]
+  @@unique([documentId,sourceRef])
+  @@index([documentId,parentId,orderIndex])
+}
+model TestRequirementNode {
+  id String @id @default(cuid())
+  projectId String
+  businessId String
+  nodeType String
+  number String?
+  title String
+  level Int
+  parentId String?
+  orderIndex Int
+  artifact String
+  content Json?
+  sourceRefs Json?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  parent TestRequirementNode? @relation("TestRequirementTree", fields:[parentId], references:[id], onDelete:SetNull)
+  children TestRequirementNode[] @relation("TestRequirementTree")
+  incomingLinks TraceLink[]
+  @@unique([projectId,businessId])
+  @@index([projectId,parentId,orderIndex])
+}
+model TraceLink {
+  id String @id @default(cuid())
+  projectId String
+  sourceNodeId String
+  targetNodeId String
+  relationType String @default("generated")
+  source String @default("phase2-test-traceability.json")
+  confidence Float?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  sourceNode DocumentNode @relation(fields:[sourceNodeId], references:[id], onDelete:Cascade)
+  targetNode TestRequirementNode @relation(fields:[targetNodeId], references:[id], onDelete:Cascade)
+  @@unique([sourceNodeId,targetNodeId])
+  @@index([projectId,sourceNodeId])
+  @@index([projectId,targetNodeId])
+}
+model Phase2Run {
+  id String @id @default(cuid())
+  projectId String
+  status RunStatus @default(QUEUED)
+  opencodeSessionId String?
+  currentStage String?
+  progress Int @default(0)
+  completedStages Json?
+  errorMessage String?
+  startedAt DateTime?
+  finishedAt DateTime?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  events RunEvent[]
+  @@index([projectId,status])
+}
+model RunEvent {
+  id BigInt @id @default(autoincrement())
+  runId String
+  type String
+  payload Json
+  createdAt DateTime @default(now())
+  run Phase2Run @relation(fields:[runId], references:[id], onDelete:Cascade)
+  @@index([runId,id])
+}
+model Review {
+  id String @id @default(cuid())
+  projectId String
+  reviewerId String
+  nodeId String
+  version Int @default(1)
+  scores Json
+  weightedScore Float
+  grade String
+  issues Json?
+  comment String?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  reviewer User @relation(fields:[reviewerId], references:[id])
+  createdAt DateTime @default(now())
+  @@unique([projectId,nodeId,version])
+}
+model AuditLog {
+  id BigInt @id @default(autoincrement())
+  userId String?
+  action String
+  resourceType String
+  resourceId String?
+  detail Json?
+  createdAt DateTime @default(now())
+}
