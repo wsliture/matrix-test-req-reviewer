@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {renderAsync} from "docx-preview";
-import {Button, Space, Tooltip, Alert, Spin} from "antd";
+import {Alert, Button, Space, Spin, Tooltip} from "antd";
 import {MinusOutlined, PlusOutlined} from "@ant-design/icons";
 import type {DocumentNode} from "./api";
 
@@ -8,10 +8,11 @@ const normalized = (value: string) => value.replace(/\s+/g, "").toLowerCase();
 const MIN_SCALE = 0.4, MAX_SCALE = 1.5, SCALE_STEP = 0.1;
 type ZoomMode = "fit" | "manual";
 
-export function DocxPreview({documentId, nodes, activeNodeId, onNodeClick}: {
+export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onNodeClick}: {
     documentId?: string;
     nodes: DocumentNode[];
     activeNodeId?: string;
+    navigationKey?: number;
     onNodeClick: (id: string) => void;
 }) {
     const shell = useRef<HTMLDivElement>(null), container = useRef<HTMLDivElement>(null);
@@ -66,7 +67,8 @@ export function DocxPreview({documentId, nodes, activeNodeId, onNodeClick}: {
                 .filter(item => !item.closest("table, header, footer"));
             const used = new Set<HTMLElement>();
             for (const node of nodes) {
-                const title = normalized(node.title), heading = normalized(node.text || `${node.number || ""}${node.title}`),
+                const title = normalized(node.title),
+                    heading = normalized(node.text || `${node.number || ""}${node.title}`),
                     candidates = paragraphs.filter(item => !used.has(item) && !item.querySelector("a") && normalized(item.textContent || "").includes(title));
                 const reversed = [...candidates].reverse();
                 let element = reversed.find(item => normalized(item.textContent || "") === heading) ||
@@ -79,7 +81,9 @@ export function DocxPreview({documentId, nodes, activeNodeId, onNodeClick}: {
             }
         }).catch(reason => !disposed && setError(reason instanceof Error ? reason.message : String(reason)))
             .finally(() => !disposed && setLoading(false));
-        return () => { disposed = true }
+        return () => {
+            disposed = true
+        }
     }, [documentId, nodes, fitToWidth]);
     useEffect(() => {
         if (!shell.current) return;
@@ -96,18 +100,24 @@ export function DocxPreview({documentId, nodes, activeNodeId, onNodeClick}: {
         const target = container.current.querySelector<HTMLElement>(`[data-source-node-id="${CSS.escape(activeNodeId)}"]`);
         target?.classList.add("source-highlight");
         target?.scrollIntoView({behavior: "smooth", block: "center"})
-    }, [activeNodeId, loading]);
+    }, [activeNodeId, loading, navigationKey]);
     return <div ref={shell} className="docx-preview-shell">
         {!error && <div className="docx-zoom-toolbar">
             <Space.Compact>
-                <Button type={zoomMode === "fit" ? "primary" : "default"} onClick={() => {setZoomMode("fit"); fitToWidth()}}>适应宽度</Button>
+                <Button type={zoomMode === "fit" ? "primary" : "default"} onClick={() => {
+                    setZoomMode("fit");
+                    fitToWidth()
+                }}>适应宽度</Button>
                 <Button onClick={() => setManualScale(1)}>100%</Button>
-                <Tooltip title="缩小"><Button aria-label="缩小" icon={<MinusOutlined/>} disabled={scale <= MIN_SCALE} onClick={() => setManualScale(scale - SCALE_STEP)}/></Tooltip>
+                <Tooltip title="缩小"><Button aria-label="缩小" icon={<MinusOutlined/>} disabled={scale <= MIN_SCALE}
+                                              onClick={() => setManualScale(scale - SCALE_STEP)}/></Tooltip>
                 <Button className="docx-zoom-value" disabled>{Math.round(scale * 100)}%</Button>
-                <Tooltip title="放大"><Button aria-label="放大" icon={<PlusOutlined/>} disabled={scale >= MAX_SCALE} onClick={() => setManualScale(scale + SCALE_STEP)}/></Tooltip>
+                <Tooltip title="放大"><Button aria-label="放大" icon={<PlusOutlined/>} disabled={scale >= MAX_SCALE}
+                                              onClick={() => setManualScale(scale + SCALE_STEP)}/></Tooltip>
             </Space.Compact>
         </div>}
         {loading && <Spin tip="正在渲染DOCX"/>}
-        {error && <Alert type="error" showIcon message="DOCX预览失败" description={error}/>}<div ref={container} className="docx-preview"/>
+        {error && <Alert type="error" showIcon message="DOCX预览失败" description={error}/>}
+        <div ref={container} className="docx-preview"/>
     </div>
 }

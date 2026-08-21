@@ -20,9 +20,11 @@
     "@prisma/client": "^6.14.0",
     "argon2": "^0.44.0",
     "bullmq": "^5.58.0",
+    "docxtemplater": "^3.69.3",
     "iconv-lite": "^0.7.3",
     "ioredis": "^5.7.0",
     "jose": "^6.0.12",
+    "pizzip": "^3.2.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "unzipper": "^0.12.3"

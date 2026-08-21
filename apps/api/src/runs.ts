@@ -33,7 +33,10 @@ export class RunsService {
     }
 
     async get(id: string) {
-        const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}, include: {events: {orderBy: {id: "desc"}, take: 100}}});
+        const run = await this.db.phase2Run.findUniqueOrThrow({
+            where: {id},
+            include: {events: {orderBy: {id: "desc"}, take: 100}}
+        });
         return {...run, events: run.events.map(item => ({...item, id: item.id.toString()}))}
     }
 

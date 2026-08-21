@@ -1,5 +1,6 @@
 import {
     Body,
+    BadRequestException,
     CanActivate,
     Controller,
     ExecutionContext,
@@ -11,7 +12,7 @@ import {
     UnauthorizedException
 } from "@nestjs/common";
 import {PrismaService} from "./prisma.js";
-import {verify} from "argon2";
+import {hash, verify} from "argon2";
 import {jwtVerify, SignJWT} from "jose";
 import {createHash, randomBytes} from "node:crypto";
 
@@ -63,6 +64,21 @@ export class AuthService {
             select: {id: true, username: true, role: true}
         })
     }
+
+    async changePassword(userId: string, currentPassword: string, newPassword: string) {
+        if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 128) {
+            throw new BadRequestException("新密码长度必须为8至128个字符")
+        }
+        const user = await this.db.user.findUniqueOrThrow({where: {id: userId}});
+        if (!await verify(user.passwordHash, currentPassword)) throw new UnauthorizedException("当前密码错误");
+        if (await verify(user.passwordHash, newPassword)) throw new BadRequestException("新密码不能与当前密码相同");
+        await this.db.$transaction([
+            this.db.user.update({where: {id: userId}, data: {passwordHash: await hash(newPassword)}}),
+            this.db.refreshToken.updateMany({where: {userId, revokedAt: null}, data: {revokedAt: new Date()}}),
+            this.db.auditLog.create({data: {userId, action: "PASSWORD_CHANGED", resourceType: "User", resourceId: userId}})
+        ]);
+        return {ok: true}
+    }
 }
 
 @Controller("auth")
@@ -94,6 +110,16 @@ export class AuthController {
         res.clearCookie("access_token", {path: "/"});
         res.clearCookie("refresh_token", {path: "/api/auth"});
         return {ok: true}
+    }
+
+    @Post("change-password") async changePassword(@Req() req: any, @Body() body: {
+        currentPassword: string,
+        newPassword: string
+    }, @Res({passthrough: true}) res: any) {
+        const result = await this.auth.changePassword(req.user.id, body.currentPassword, body.newPassword);
+        res.clearCookie("access_token", {path: "/"});
+        res.clearCookie("refresh_token", {path: "/api/auth"});
+        return result
     }
 
     @Get("me") me(@Req() req: any) {

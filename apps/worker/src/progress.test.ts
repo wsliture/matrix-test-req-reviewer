@@ -1,5 +1,11 @@
 import {describe, expect, it} from "vitest";
-import {missingCompletionStages, parseToolOutput, progressOf, REQUIRED_COMPLETION_STAGES, STAGE_WEIGHTS} from "./progress.js";
+import {
+    missingCompletionStages,
+    parseToolOutput,
+    progressOf,
+    REQUIRED_COMPLETION_STAGES,
+    STAGE_WEIGHTS
+} from "./progress.js";
 
 describe("Phase 2 progress", () => {
     it("never reaches 100 before final verification", () => {
