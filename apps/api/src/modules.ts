@@ -7,10 +7,15 @@ import {RunsController, RunsService} from "./runs.js";
 import {ReviewsController} from "./reviews.js";
 import {DocumentsController} from "./documents.js";
 import {TraceabilityController, TraceabilityService} from "./traceability.js";
+import {ExportsController} from "./exports.js";
+import {SettingsController} from "./settings.js";
 
 @Module({
-    controllers: [AuthController, ProjectsController, RunsController, ReviewsController, DocumentsController, TraceabilityController],
-    providers: [PrismaService, AuthService, ProjectsService, RunsService, TraceabilityService, {provide: APP_GUARD, useClass: AuthGuard}]
+    controllers: [AuthController, ProjectsController, RunsController, ReviewsController, DocumentsController, TraceabilityController, ExportsController, SettingsController],
+    providers: [PrismaService, AuthService, ProjectsService, RunsService, TraceabilityService, {
+        provide: APP_GUARD,
+        useClass: AuthGuard
+    }]
 })
 export class AppModule {
 }

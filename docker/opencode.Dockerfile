@@ -1,6 +1,6 @@
 FROM node:22-bookworm
 WORKDIR /plugin
-RUN npm install -g bun@1.3.6 opencode-ai@1.18.18
+RUN npm install -g bun@1.3.6 opencode-linux-x64@1.18.18 opencode-ai@1.18.18
 COPY package.json bun.lock ./
 RUN bun install --ignore-scripts
 COPY src src

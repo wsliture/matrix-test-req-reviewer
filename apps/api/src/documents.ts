@@ -11,7 +11,11 @@ export class DocumentsController {
     @Get(":id/file") async file(@Param("id") id: string, @Res() reply: any) {
         const document = await this.db.document.findUnique({where: {id}});
         if (!document) throw new NotFoundException("文档不存在");
-        try { await access(document.objectKey) } catch { throw new NotFoundException("DOCX源文件不存在") }
+        try {
+            await access(document.objectKey)
+        } catch {
+            throw new NotFoundException("DOCX源文件不存在")
+        }
         return reply.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(document.name)}`)
             .send(createReadStream(document.objectKey))

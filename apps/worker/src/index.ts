@@ -157,7 +157,13 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
     const progress = progressOf(completed);
     const completedStage = Number.isInteger(batchIndex) && batchIndex! > 0 ? `${actual}:${batchIndex}` : actual;
     await update(runId, {stage: completedStage, progress, completed});
-    await event(runId, "stage.completed", {mode: actual, batchIndex, progress, summary: output.summary, output: output.output})
+    await event(runId, "stage.completed", {
+        mode: actual,
+        batchIndex,
+        progress,
+        summary: output.summary,
+        output: output.output
+    })
 }
 
 new Worker("phase2", async job => {
@@ -215,14 +221,16 @@ new Worker("phase2", async job => {
 }).on("error", error => console.error("Phase2 worker error", error));
 
 new Worker("document-index", async job => {
-    const {projectId, workspacePath} = job.data as {projectId: string; workspacePath: string};
+    const {projectId, workspacePath} = job.data as { projectId: string; workspacePath: string };
     await indexProject(db, projectId, workspacePath);
     return {ok: true}
 }, {connection, concurrency: 2}).on("error", error => console.error("Document index worker error", error));
 
 setTimeout(async () => {
     try {
-        const projects = await db.query('select p.id,p."workspacePath" from "Project" p where not exists (select 1 from "DocumentNode" n join "Document" d on d.id=n."documentId" where d."projectId"=p.id)');
+        const projects = await db.query(`select p.id,p."workspacePath" from "Project" p where
+            not exists (select 1 from "DocumentNode" n join "Document" d on d.id=n."documentId" where d."projectId"=p.id)
+            or not exists (select 1 from "TestRequirementNode" n where n."projectId"=p.id and n."nodeType"='requirement' and n.artifact='performance-test-content.json')`);
         for (const item of projects.rows) await indexProject(db, item.id, item.workspacePath)
     } catch (error) {
         console.error("Existing project indexing failed", error)

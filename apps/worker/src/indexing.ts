@@ -1,14 +1,32 @@
 import JSZip from "jszip";
 import {XMLParser} from "fast-xml-parser";
 import {createHash} from "node:crypto";
-import {readFile, readdir, rm} from "node:fs/promises";
+import {readdir, readFile, rm} from "node:fs/promises";
 import path from "node:path";
 import type {Pool} from "pg";
 
 type Json = Record<string, any>;
-type TocEntry = {segment_id: string; level: number; title: string; section_path_ids?: string[]; section_path_titles?: string[]};
-type Paragraph = {text: string; paraId?: string; index: number};
-type RequirementDraft = {id: string; businessId: string; nodeType: string; number?: string; title: string; level: number; parentId?: string; order: number; artifact: string; content: Json; sourceRefs: string[]};
+type TocEntry = {
+    segment_id: string;
+    level: number;
+    title: string;
+    section_path_ids?: string[];
+    section_path_titles?: string[]
+};
+type Paragraph = { text: string; paraId?: string; index: number };
+type RequirementDraft = {
+    id: string;
+    businessId: string;
+    nodeType: string;
+    number?: string;
+    title: string;
+    level: number;
+    parentId?: string;
+    order: number;
+    artifact: string;
+    content: Json;
+    sourceRefs: string[]
+};
 
 const ARTIFACTS = [
     ["chapter1-scope.json", "1", "范围"], ["chapter2-system-overview.json", "2", "系统概述"],
@@ -19,8 +37,17 @@ const ARTIFACTS = [
     ["recovery-test-content.json", "4.8", "恢复性测试"], ["strength-test-content.json", "4.9", "强度测试"],
     ["phase2-test-traceability.json", "6", "测试需求覆盖性说明"]
 ] as const;
+const NON_FUNCTIONAL_ARTIFACTS = new Set([
+    "performance-test-content.json", "interface-test-content.json", "reliability-safety-test-content.json",
+    "margin-test-content.json", "boundary-test-content.json", "data-processing-test-content.json",
+    "recovery-test-content.json", "strength-test-content.json"
+]);
 
-const parser = new XMLParser({ignoreAttributes: false, attributeNamePrefix: "@_", isArray: name => ["w:p", "w:r", "w:t"].includes(name)});
+const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: "@_",
+    isArray: name => ["w:p", "w:r", "w:t"].includes(name)
+});
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const stableId = (prefix: string, value: string) => `${prefix}-${hash(value).slice(0, 24)}`;
 const asArray = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
@@ -67,28 +94,44 @@ async function docxFiles(root: string): Promise<string[]> {
 }
 
 async function readJson(file: string): Promise<Json | undefined> {
-    try { return JSON.parse(await readFile(file, "utf8")) } catch { return undefined }
+    try {
+        return JSON.parse(await readFile(file, "utf8"))
+    } catch {
+        return undefined
+    }
 }
 
 function sourceDescriptors(workspace: string, artifacts?: Json) {
-    const values: {file: string; prefix: string; toc?: string}[] = [];
-    if (artifacts?.primary_document) values.push({file: artifacts.primary_document.path, prefix: "primary", toc: artifacts.primary_document.toc_path});
+    const values: { file: string; prefix: string; toc?: string }[] = [];
+    if (artifacts?.primary_document) values.push({
+        file: artifacts.primary_document.path,
+        prefix: "primary",
+        toc: artifacts.primary_document.toc_path
+    });
     for (const item of artifacts?.supporting_documents || []) {
         const folder = path.basename(path.dirname(item.toc_path || ""));
         values.push({file: item.path, prefix: `supporting-${folder}`, toc: item.toc_path})
     }
-    return values.map(item => ({...item, file: path.join(workspace, path.basename(item.file)), toc: item.toc ? path.join(workspace, ".matrix", "data", ...item.toc.replace(/\\/g, "/").split("/.matrix/data/").pop()!.split("/")) : undefined}))
+    return values.map(item => ({
+        ...item,
+        file: path.join(workspace, path.basename(item.file)),
+        toc: item.toc ? path.join(workspace, ".matrix", "data", ...item.toc.replace(/\\/g, "/").split("/.matrix/data/").pop()!.split("/")) : undefined
+    }))
 }
 
 async function indexDocuments(db: Pool, projectId: string, workspace: string) {
-    const dataDir = path.join(workspace, ".matrix", "data"), artifacts = await readJson(path.join(dataDir, "source-artifacts.json"));
-    const descriptors = sourceDescriptors(workspace, artifacts), files = await docxFiles(workspace), activeDocumentIds: string[] = [];
+    const dataDir = path.join(workspace, ".matrix", "data"),
+        artifacts = await readJson(path.join(dataDir, "source-artifacts.json"));
+    const descriptors = sourceDescriptors(workspace, artifacts), files = await docxFiles(workspace),
+        activeDocumentIds: string[] = [];
     for (const file of files) {
         const descriptor = descriptors.find(item => path.basename(item.file).toLowerCase() === path.basename(file).toLowerCase());
-        const prefix = descriptor?.prefix || `document-${hash(path.basename(file)).slice(0, 8)}`, documentId = stableId("doc", `${projectId}:${path.basename(file)}`);
+        const prefix = descriptor?.prefix || `document-${hash(path.basename(file)).slice(0, 8)}`,
+            documentId = stableId("doc", `${projectId}:${path.basename(file)}`);
         activeDocumentIds.push(documentId);
         try {
-            const buffer = await readFile(file), paragraphs = await paragraphsOf(file), tocJson = descriptor?.toc ? await readJson(descriptor.toc) : undefined;
+            const buffer = await readFile(file), paragraphs = await paragraphsOf(file),
+                tocJson = descriptor?.toc ? await readJson(descriptor.toc) : undefined;
             let toc = chapterToc((tocJson?.toc || []) as TocEntry[]);
             if (!toc.length) toc = paragraphs.filter(item => /^(\d+(?:\.\d+)*)\s+\S/.test(item.text)).map(item => {
                 const match = item.text.match(/^(\d+(?:\.\d+)*)\s+(.+)$/)!;
@@ -99,13 +142,16 @@ async function indexDocuments(db: Pool, projectId: string, workspace: string) {
             const nodeIds = new Map<string, string>();
             let searchFrom = 0;
             for (let order = 0; order < toc.length; order++) {
-                const item = toc[order], sourceRef = `${prefix}::${item.segment_id}`, id = stableId("dn", `${documentId}:${sourceRef}`);
+                const item = toc[order], sourceRef = `${prefix}::${item.segment_id}`,
+                    id = stableId("dn", `${documentId}:${sourceRef}`);
                 const normalized = item.title.replace(/\s+/g, "").toLowerCase();
                 let paragraph = paragraphs.find(value => value.index >= searchFrom && value.text.replace(/\s+/g, "").toLowerCase().includes(normalized));
                 if (!paragraph) paragraph = paragraphs.find(value => value.text.replace(/\s+/g, "").toLowerCase().includes(normalized));
                 if (paragraph) searchFrom = paragraph.index + 1;
-                const pathIds = item.section_path_ids || [], parentRef = pathIds.length > 1 ? `${prefix}::${pathIds[pathIds.length - 2]}` : undefined,
-                    number = item.segment_id.replace(/^SRS-/, "").replace(/^00+(?=\d)/, ""), headingPath = item.section_path_titles || [item.title];
+                const pathIds = item.section_path_ids || [],
+                    parentRef = pathIds.length > 1 ? `${prefix}::${pathIds[pathIds.length - 2]}` : undefined,
+                    number = item.segment_id.replace(/^SRS-/, "").replace(/^00+(?=\d)/, ""),
+                    headingPath = item.section_path_titles || [item.title];
                 await db.query('insert into "DocumentNode" (id,"documentId","sourceRef","number",title,text,level,"parentId","orderIndex","paragraphIndex","paraId","textHash","headingPath") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [id, documentId, sourceRef, number === "PREAMBLE" ? null : number, item.title, paragraph?.text, item.level, parentRef ? nodeIds.get(parentRef) || null : null, order, paragraph?.index, paragraph?.paraId, hash(paragraph?.text || item.title), JSON.stringify(headingPath)]);
                 nodeIds.set(sourceRef, id)
             }
@@ -120,22 +166,41 @@ function sourceRefsOf(value: Json) {
     return [...new Set([value.source_ref, ...asArray(value.source_refs)].filter(item => typeof item === "string"))] as string[]
 }
 
-function findNumber(value: Json) { return value.title_no || value.section_title_no || value.chapter_title_no || value.requirement_no }
-function findTitle(value: Json) { return value.title || value.section_title || value.chapter_title || value.name }
+function findNumber(value: Json) {
+    return value.title_no || value.section_title_no || value.chapter_title_no || value.requirement_no
+}
+
+function findTitle(value: Json) {
+    return value.title || value.section_title || value.chapter_title || value.name
+}
 
 function collectRequirements(value: any, artifact: string, drafts: RequirementDraft[], parentId?: string, parentLevel = 0) {
     if (!value || typeof value !== "object") return;
     if (Array.isArray(value)) return value.forEach(item => collectRequirements(item, artifact, drafts, parentId, parentLevel));
     const requirementId = typeof value.requirement_id === "string" ? value.requirement_id : undefined,
-        number = findNumber(value), rawTitle = findTitle(value), title = requirementId ? String(value.content || rawTitle || requirementId).slice(0, 100) : rawTitle,
+        number = findNumber(value), rawTitle = findTitle(value),
+        title = requirementId ? String(value.content || rawTitle || requirementId).slice(0, 100) : rawTitle,
         isNode = Boolean(requirementId || (number && title));
     let currentParent = parentId, level = parentLevel;
     if (isNode) {
-        const businessId = requirementId || `${artifact}:${number}:${title}`, existing = drafts.find(item => item.businessId === businessId);
+        const businessId = requirementId || `${artifact}:${number}:${title}`,
+            existing = drafts.find(item => item.businessId === businessId);
         if (!existing) {
             level = requirementId ? parentLevel + 1 : typeof number === "string" ? number.split(".").length : parentLevel + 1;
             const id = stableId("trn", businessId);
-            drafts.push({id, businessId, nodeType: requirementId ? "requirement" : "section", number: requirementId || number, title: String(title), level, parentId, order: drafts.length, artifact, content: value, sourceRefs: sourceRefsOf(value)});
+            drafts.push({
+                id,
+                businessId,
+                nodeType: requirementId ? "requirement" : "section",
+                number: requirementId || number,
+                title: String(title),
+                level,
+                parentId,
+                order: drafts.length,
+                artifact,
+                content: value,
+                sourceRefs: sourceRefsOf(value)
+            });
             currentParent = id
         } else {
             currentParent = existing.id;
@@ -148,23 +213,100 @@ function collectRequirements(value: any, artifact: string, drafts: RequirementDr
     }
 }
 
+function collectHardwareRequirements(data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
+    for (const [interfaceIndex, item] of asArray(data.interfaces).entries()) {
+        if (!item || typeof item !== "object") continue;
+        const number = `3.1.${interfaceIndex + 1}`;
+        const title = String(item.title || item.interface_name || item.name || `硬件接口${interfaceIndex + 1}`);
+        const businessId = `${artifact}:${number}:${title}`;
+        const id = stableId("trn", businessId);
+        drafts.push({
+            id,
+            businessId,
+            nodeType: "section",
+            number,
+            title,
+            level: 3,
+            parentId: rootId,
+            order: drafts.length,
+            artifact,
+            content: item,
+            sourceRefs: sourceRefsOf(item)
+        });
+        for (const [topicIndex, topic] of asArray(item.topics).entries()) {
+            if (!topic || typeof topic !== "object") continue;
+            const topicNumber = `${number}.${topicIndex + 1}`;
+            const topicTitle = String(topic.title || topic.name || `接口数据流${topicIndex + 1}`);
+            const topicBusinessId = `${artifact}:${topicNumber}:${topicTitle}`;
+            drafts.push({
+                id: stableId("trn", topicBusinessId),
+                businessId: topicBusinessId,
+                nodeType: "section",
+                number: topicNumber,
+                title: topicTitle,
+                level: 4,
+                parentId: id,
+                order: drafts.length,
+                artifact,
+                content: topic,
+                sourceRefs: sourceRefsOf(topic)
+            })
+        }
+    }
+}
+
+function collectNonFunctionalRequirements(data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
+    const sectionNumber = String(data.section_title_no || ""),
+        section = drafts.find(item => item.artifact === artifact && item.number === sectionNumber),
+        parentId = section?.id || rootId,
+        level = (section?.level || 2) + 1;
+    for (const row of asArray<Json>(data.rows)) {
+        if (!row || typeof row !== "object") continue;
+        const requirementId = String(row.requirement_id || row.test_requirement_id || "").trim();
+        if (!requirementId || drafts.some(item => item.businessId === requirementId)) continue;
+        const description = Object.entries(row).find(([key, value]) => key.endsWith("_requirement_description") && typeof value === "string")?.[1];
+        drafts.push({
+            id: stableId("trn", requirementId), businessId: requirementId, nodeType: "requirement",
+            number: requirementId, title: String(description || row.related_description || requirementId), level,
+            parentId, order: drafts.length, artifact, content: row, sourceRefs: sourceRefsOf(row)
+        })
+    }
+}
+
 async function indexRequirements(db: Pool, projectId: string, workspace: string) {
     const dataDir = path.join(workspace, ".matrix", "data"), drafts: RequirementDraft[] = [];
     for (const [artifact, number, title] of ARTIFACTS) {
         const data = await readJson(path.join(dataDir, artifact));
         if (!data) continue;
         const rootId = stableId("trn", `${artifact}:${number}:${title}`);
-        drafts.push({id: rootId, businessId: `${artifact}:${number}:${title}`, nodeType: "section", number, title, level: number.split(".").length, order: drafts.length, artifact, content: data, sourceRefs: sourceRefsOf(data)});
-        collectRequirements(data, artifact, drafts, rootId, number.split(".").length)
+        drafts.push({
+            id: rootId,
+            businessId: `${artifact}:${number}:${title}`,
+            nodeType: "section",
+            number,
+            title,
+            level: number.split(".").length,
+            order: drafts.length,
+            artifact,
+            content: data,
+            sourceRefs: sourceRefsOf(data)
+        });
+        if (artifact === "hardware-interface-model.json") collectHardwareRequirements(data, artifact, drafts, rootId);
+        else {
+            collectRequirements(data, artifact, drafts, rootId, number.split(".").length);
+            if (NON_FUNCTIONAL_ARTIFACTS.has(artifact)) collectNonFunctionalRequirements(data, artifact, drafts, rootId)
+        }
     }
     await db.query('delete from "TestRequirementNode" where "projectId"=$1', [projectId]);
     for (const item of drafts) await db.query('insert into "TestRequirementNode" (id,"projectId","businessId","nodeType",number,title,level,"parentId","orderIndex",artifact,content,"sourceRefs") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [item.id, projectId, item.businessId, item.nodeType, item.number, item.title, item.level, item.parentId || null, item.order, item.artifact, JSON.stringify(item.content), JSON.stringify(item.sourceRefs)]);
     await db.query('delete from "TraceLink" where "projectId"=$1', [projectId]);
     const sourceRows = await db.query('select d.id,d."sourceRef" from "DocumentNode" d join "Document" doc on doc.id=d."documentId" where doc."projectId"=$1', [projectId]),
-        sourceMap = new Map(sourceRows.rows.map(row => [row.sourceRef, row.id])), targetMap = new Map(drafts.map(item => [item.businessId, item.id]));
+        sourceMap = new Map(sourceRows.rows.map(row => [row.sourceRef, row.id])),
+        targetMap = new Map(drafts.map(item => [item.businessId, item.id]));
     const links = new Set<string>();
     const add = async (sourceRef: string, businessId: string, source: string) => {
-        const sourceId = sourceMap.get(sourceRef), targetId = targetMap.get(businessId), key = `${sourceId}:${targetId}`;
+        const sourceId = sourceMap.get(sourceRef), targetId = targetMap.get(businessId),
+            key = `${sourceId}:${targetId}`;
         if (!sourceId || !targetId || links.has(key)) return;
         links.add(key);
         await db.query('insert into "TraceLink" (id,"projectId","sourceNodeId","targetNodeId",source) values ($1,$2,$3,$4,$5)', [stableId("tl", key), projectId, sourceId, targetId, source])

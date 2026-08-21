@@ -1,17 +1,50 @@
 #!/bin/sh
-set -eu
+set -u
 
-MODEL_ID="deepseek/deepseek-v4-flash"
+CONFIG_DIR=/root/.config/opencode
+CONFIG_FILE="$CONFIG_DIR/opencode.json"
+RESTART_FILE="$CONFIG_DIR/.restart-request"
+APPLIED_FILE="$CONFIG_DIR/.restart-applied"
 
-if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
-  echo "错误：未配置 DEEPSEEK_API_KEY，OpenCode 无法使用 DeepSeek V4 Flash。" >&2
-  exit 1
+mkdir -p "$CONFIG_DIR"
+if [ ! -s "$CONFIG_FILE" ]; then
+  printf '{"$schema":"https://opencode.ai/config.json","model":"deepseek/deepseek-v4-flash","plugin":["file:///plugin/dist/index.js"]}\n' > "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
 fi
 
-if ! opencode models deepseek 2>/dev/null | grep -Fxq "$MODEL_ID"; then
-  echo "错误：OpenCode 模型目录中未找到 $MODEL_ID，请检查网络和 DeepSeek 提供商配置。" >&2
-  exit 1
-fi
+child_pid=""
+last_request="$(cat "$RESTART_FILE" 2>/dev/null || true)"
 
-echo "OpenCode 默认模型：DeepSeek V4 Flash ($MODEL_ID)"
-exec "$@"
+start_server() {
+  echo "正在启动OpenCode服务"
+  "$@" &
+  child_pid=$!
+}
+
+stop_server() {
+  if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+}
+
+trap 'stop_server; exit 0' INT TERM
+start_server "$@"
+
+while true; do
+  if ! kill -0 "$child_pid" 2>/dev/null; then
+    wait "$child_pid" 2>/dev/null || true
+    echo "OpenCode服务已退出，2秒后自动重试"
+    sleep 2
+    start_server "$@"
+  fi
+  request="$(cat "$RESTART_FILE" 2>/dev/null || true)"
+  if [ -n "$request" ] && [ "$request" != "$last_request" ]; then
+    echo "检测到OpenCode配置更新，正在重启服务"
+    stop_server
+    last_request="$request"
+    start_server "$@"
+    printf '%s\n' "$request" > "$APPLIED_FILE"
+  fi
+  sleep 1
+done
