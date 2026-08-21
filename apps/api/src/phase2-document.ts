@@ -237,7 +237,9 @@ function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
         flowGroup(item.input_flow, item.input_tables, `${title}输入数据表`);
         flowGroup(item.output_flow, item.output_tables, `${title}输出数据表`);
         (item.topics || []).forEach((sub: Json, subIndex: number) => {
-            blocks.push(heading(`${number}.${subIndex + 1} ${text(sub.title || sub.name)}`, 4, undefined, refs(sub)));
+            const topicNumber = `${number}.${subIndex + 1}`,
+                topicNode = lookup.anchor(artifact, topicNumber, text(sub.business_id || sub.requirement_id || sub.id));
+            blocks.push(heading(`${topicNumber} ${text(sub.title || sub.name)}`, 4, topicNode?.id, refs(sub), topicNode?.businessId));
             flowGroup(sub.input_flow, sub.input_tables, `${text(sub.title)}输入数据表`);
             flowGroup(sub.output_flow, sub.output_tables, `${text(sub.title)}输出数据表`)
         })
