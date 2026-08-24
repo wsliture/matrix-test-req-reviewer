@@ -132,7 +132,8 @@ function Projects() {
         queryFn: () => api<Project[]>("/projects")
     }), [open, setOpen] = useState(false), [archiveFile, setArchiveFile] = useState<File | null>(null),
         [createForm] = Form.useForm(), [settingsOpen, setSettingsOpen] = useState(false),
-        [passwordForm] = Form.useForm(), [configContent, setConfigContent] = useState(""), upload = useMutation({
+        [passwordForm] = Form.useForm(), [userForm] = Form.useForm(),
+        [configContent, setConfigContent] = useState(""), upload = useMutation({
         mutationFn: async ({name, file}: { name: string; file: File }) => {
             const form = new FormData();
             form.append("name", name);
@@ -158,6 +159,17 @@ function Projects() {
             qc.setQueryData(["me"], null);
             nav("/login", {replace: true})
         }
+    }), createUser = useMutation({
+        mutationFn: (values: { username: string; password: string }) => api<{
+            id: string;
+            username: string;
+            role: string;
+            createdAt: string
+        }>("/settings/users", {method: "POST", body: JSON.stringify(values)}),
+        onSuccess: result => {
+            userForm.resetFields();
+            message.success(`用户“${result.username}”已创建`)
+        }
     }), saveConfig = useMutation({
         mutationFn: () => api<{ content: string }>("/settings/opencode", {
             method: "PUT", body: JSON.stringify({content: configContent})
@@ -178,8 +190,54 @@ function Projects() {
     useEffect(() => {
         if (configQuery.data?.content) setConfigContent(configQuery.data.content)
     }, [configQuery.data?.content]);
-    const settings = user?.role === "ADMIN" ? <Button ghost icon={<SettingOutlined/>}
-                                                               onClick={() => setSettingsOpen(true)}>设置</Button> : null;
+    const settings = <Button ghost icon={<SettingOutlined/>} onClick={() => setSettingsOpen(true)}>设置</Button>;
+    const settingsItems = [{
+        key: "password", label: "修改密码", children: <Form form={passwordForm} layout="vertical"
+            onFinish={values => changePassword.mutate({currentPassword: values.currentPassword, newPassword: values.newPassword})}>
+            <Form.Item name="currentPassword" label="当前密码" rules={[{required: true, message: "请输入当前密码"}]}><Input.Password/></Form.Item>
+            <Form.Item name="newPassword" label="新密码" rules={[{required: true, message: "请输入新密码"},
+                {min: 8, max: 128, message: "密码长度必须为8至128个字符"}]}><Input.Password/></Form.Item>
+            <Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{required: true, message: "请再次输入新密码"},
+                ({getFieldValue}: any) => ({validator(_: unknown, value: string) {
+                    return !value || getFieldValue("newPassword") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的新密码不一致"))
+                }})]}><Input.Password/></Form.Item>
+            {changePassword.error && <Alert type="error" showIcon message={changePassword.error.message}/>}<Button
+                type="primary" htmlType="submit" loading={changePassword.isPending}>修改密码</Button></Form>
+    }, ...(user?.role === "ADMIN" ? [{
+        key: "users", label: "添加用户", children: <Form form={userForm} layout="vertical"
+            onFinish={values => createUser.mutate({username: values.username.trim(), password: values.password})}>
+            <Alert type="info" showIcon message="新用户将以评审人员身份创建，可使用项目创建、测试需求生成、评审和导出功能。"/>
+            <Form.Item name="username" label="用户名" rules={[{required: true, whitespace: true, message: "请输入用户名"},
+                {max: 64, message: "用户名不能超过64个字符"}]}><Input autoComplete="off" placeholder="请输入用户名"/></Form.Item>
+            <Form.Item name="password" label="初始密码" rules={[{required: true, message: "请输入初始密码"},
+                {min: 8, max: 128, message: "密码长度必须为8至128个字符"}]}><Input.Password autoComplete="new-password"/></Form.Item>
+            <Form.Item name="confirmPassword" label="确认初始密码" dependencies={["password"]} rules={[{required: true, message: "请再次输入初始密码"},
+                ({getFieldValue}: any) => ({validator(_: unknown, value: string) {
+                    return !value || getFieldValue("password") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致"))
+                }})]}><Input.Password autoComplete="new-password"/></Form.Item>
+            {createUser.isSuccess && <Alert type="success" showIcon closable
+                message={`用户“${createUser.data.username}”创建成功`}
+                description="该用户现在可以使用初始密码登录系统。"
+                onClose={() => createUser.reset()}/>}
+            {createUser.error && <Alert type="error" showIcon message={createUser.error.message}/>}<Button
+                type="primary" htmlType="submit" loading={createUser.isPending}>创建用户</Button></Form>
+    }, {
+        key: "opencode", label: "OpenCode配置", children: <div><Alert type="warning" showIcon
+            message="配置中可能包含明文API Key，仅管理员可以查看和修改。保存时会自动保留Matrix插件。"/>
+            {configQuery.isLoading ? <Spin/> : <><Input.TextArea className="opencode-config-editor" rows={20}
+                value={configContent} onChange={event => setConfigContent(event.target.value)} spellCheck={false}/>
+                {configQuery.error && <Alert type="error" showIcon message={configQuery.error.message}/>}
+                {saveConfig.error && <Alert type="error" showIcon message={saveConfig.error.message}/>}<Space>
+                    <Button onClick={() => {
+                        try {
+                            setConfigContent(JSON.stringify(JSON.parse(configContent), null, 2) + "\n")
+                        } catch {
+                            message.error("当前内容不是合法JSON")
+                        }
+                    }}>格式化JSON</Button><Button type="primary" loading={saveConfig.isPending}
+                                              onClick={() => saveConfig.mutate()}>保存并应用</Button></Space></>}
+        </div>
+    }] : [])];
     return <Shell actions={settings}><Content className="page"><Space
         style={{width: "100%", justifyContent: "space-between"}}><Typography.Title level={3}>项目列表</Typography.Title><Button
         type="primary" icon={<PlusOutlined/>} onClick={() => setOpen(true)}>新建项目</Button></Space><Row
@@ -223,34 +281,7 @@ function Projects() {
             <p>上传仅包含DOCX源文档的ZIP压缩包</p><p className="upload-hint">不允许包含DOC、PDF、.matrix或其他格式文件</p>
         </Upload.Dragger></Form.Item></Form>{upload.error && <Alert type="error" showIcon message={upload.error.message}/>}</Modal>
         <Modal open={settingsOpen} title="系统设置" width={760} footer={null} destroyOnHidden
-               onCancel={() => setSettingsOpen(false)}><Tabs items={[{
-            key: "password", label: "修改密码", children: <Form form={passwordForm} layout="vertical"
-                onFinish={values => changePassword.mutate({currentPassword: values.currentPassword, newPassword: values.newPassword})}>
-                <Form.Item name="currentPassword" label="当前密码" rules={[{required: true}]}><Input.Password/></Form.Item>
-                <Form.Item name="newPassword" label="新密码" rules={[{required: true}, {min: 8, max: 128}]}><Input.Password/></Form.Item>
-                <Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{required: true},
-                    ({getFieldValue}) => ({validator(_, value) {
-                        return !value || getFieldValue("newPassword") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的新密码不一致"))
-                    }})]}><Input.Password/></Form.Item>
-                {changePassword.error && <Alert type="error" showIcon message={changePassword.error.message}/>}<Button
-                    type="primary" htmlType="submit" loading={changePassword.isPending}>修改密码</Button></Form>
-        }, {
-            key: "opencode", label: "OpenCode配置", children: <div><Alert type="warning" showIcon
-                message="配置中可能包含明文API Key，仅管理员可以查看和修改。保存时会自动保留Matrix插件。"/>
-                {configQuery.isLoading ? <Spin/> : <><Input.TextArea className="opencode-config-editor" rows={20}
-                    value={configContent} onChange={event => setConfigContent(event.target.value)} spellCheck={false}/>
-                    {configQuery.error && <Alert type="error" showIcon message={configQuery.error.message}/>}
-                    {saveConfig.error && <Alert type="error" showIcon message={saveConfig.error.message}/>}<Space>
-                        <Button onClick={() => {
-                            try {
-                                setConfigContent(JSON.stringify(JSON.parse(configContent), null, 2) + "\n")
-                            } catch {
-                                message.error("当前内容不是合法JSON")
-                            }
-                        }}>格式化JSON</Button><Button type="primary" loading={saveConfig.isPending}
-                                                  onClick={() => saveConfig.mutate()}>保存并应用</Button></Space></>}
-            </div>
-        }]}/></Modal></Content></Shell>
+               onCancel={() => setSettingsOpen(false)}><Tabs items={settingsItems}/></Modal></Content></Shell>
 }
 
 function Status({value}: { value: string }) {

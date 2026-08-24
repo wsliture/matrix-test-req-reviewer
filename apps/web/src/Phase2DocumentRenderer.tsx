@@ -1,6 +1,6 @@
-import {createElement, useState} from "react";
-import {Alert, Button, Popover, Tag, Tooltip} from "antd";
-import {AuditOutlined, LinkOutlined} from "@ant-design/icons";
+import {createElement} from "react";
+import {Alert, Button, Tag} from "antd";
+import {AuditOutlined} from "@ant-design/icons";
 import type {Phase2Block, Phase2Chapter, TraceLink} from "./api";
 
 type Props = {
@@ -12,31 +12,23 @@ type Props = {
     onEvaluate: (targetId: string) => void;
 };
 
-function TraceSourcePopover({targetId, links, onSource}: {
+function TraceSourceLinks({targetId, links, onSource, inline = false}: {
     targetId?: string;
     links: TraceLink[];
-    onSource: (link: TraceLink) => void
+    onSource: (link: TraceLink) => void;
+    inline?: boolean
 }) {
-    const [open, setOpen] = useState(false);
     if (!targetId) return null;
     const values = [...new Map(links.filter(link => link.targetNodeId === targetId)
         .map(link => [link.sourceNodeId, link])).values()];
     if (!values.length) return null;
-    const content = <div className="trace-source-popover-list">{values.map(link => <Tag color="blue" key={link.id}
-        onClick={() => {
-            setOpen(false);
-            onSource(link)
-        }}>
+    const Wrapper = inline ? "span" : "div";
+    return <Wrapper className={inline ? "trace-source-links trace-source-links-inline" : "trace-source-links trace-source-links-block"}>
+        <span className="trace-source-label">追溯来源：</span>
+        {values.map(link => <Tag color="blue" key={link.id} onClick={() => onSource(link)}>
         {link.sourceNode.document?.name.replace(/\.docx$/i, "")} {link.sourceNode.number || link.sourceNode.title}
-    </Tag>)}</div>;
-    return <Popover open={open} onOpenChange={setOpen} trigger={["hover", "click"]} placement="top"
-                    mouseEnterDelay={0.12} mouseLeaveDelay={0.18} content={content}
-                    title="追溯来源" getPopupContainer={() => window.document.body}>
-        <Tooltip title="查看追溯来源">
-            <Button type="text" size="small" className="trace-source-trigger" aria-label="查看追溯来源"
-                    icon={<LinkOutlined/>} onClick={event => event.stopPropagation()}/>
-        </Tooltip>
-    </Popover>
+        </Tag>)}
+    </Wrapper>
 }
 
 function Block({block, links, activeId, reviewScores, onSource, onEvaluate}: {
@@ -57,19 +49,18 @@ function Block({block, links, activeId, reviewScores, onSource, onEvaluate}: {
         const headingName = `h${Math.min(Math.max(block.level || 1, 1), 5)}`;
         return <section {...anchorProps} className={`phase2-heading-block${active}`}>
             <div className="phase2-heading-line"><div className="phase2-heading-title">
-                {createElement(headingName, null,
-                    block.text,
-                    <TraceSourcePopover targetId={block.anchorId} links={links} onSource={onSource}/>
-                )}
+                {createElement(headingName, null, block.text)}
             </div>
                 {block.evaluable && block.anchorId &&
                     <Button type="primary" icon={<AuditOutlined/>} className="evaluation-trigger"
                             onClick={() => onEvaluate(block.anchorId!)}>
                         内容质量评估{reviewScores?.[block.anchorId] !== undefined ? ` · 已评 ${reviewScores[block.anchorId].toFixed(2)}` : ""}
-                    </Button>}</div></section>
+                    </Button>}</div>
+            <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource}/>
+        </section>
     }
     if (block.type === "paragraph") return <div {...anchorProps} className={`phase2-paragraph${active}`}>
-        <p>{block.text}<TraceSourcePopover targetId={block.anchorId} links={links} onSource={onSource}/></p></div>;
+        <p>{block.text}<TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} inline/></p></div>;
     if (block.type === "list") return <div className="phase2-list">{block.items?.map((item, index) => <p
         key={`${item}-${index}`}>{item}</p>)}</div>;
     if (block.cells?.length) return <div className="phase2-table-wrap">
@@ -92,7 +83,7 @@ function Block({block, links, activeId, reviewScores, onSource, onEvaluate}: {
                 return <tr key={rowIndex} id={rowId ? `requirement-${rowId}` : undefined} data-requirement-id={rowId}
                            className={rowId === activeId ? "phase2-target-highlight" : undefined}>{row.map((cell, index) =>
                     <td key={index}>{cell}{index === 1 && rowId ?
-                        <TraceSourcePopover targetId={rowId} links={links} onSource={onSource}/> : null}</td>)}</tr>
+                        <TraceSourceLinks targetId={rowId} links={links} onSource={onSource} inline/> : null}</td>)}</tr>
             })}</tbody>
         </table>
     </div>

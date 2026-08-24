@@ -511,48 +511,53 @@ html, body, #root {
     text-align: center
 }
 
-.trace-source-trigger.ant-btn {
-    display: inline-flex;
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
-    margin: 0 0 0 5px;
-    padding: 0;
-    vertical-align: text-bottom;
-    color: #1677ff;
-    border-radius: 50%
-}
-
-.phase2-heading-title .trace-source-trigger.ant-btn {
-    margin-top: 0;
-    line-height: 1
-}
-
 .phase2-heading-line > .evaluation-trigger.ant-btn {
     margin-top: 8px
 }
 
-.trace-source-trigger.ant-btn:hover {
-    color: #0958d9;
-    background: #e6f4ff
-}
-
-.trace-source-popover-list {
+.trace-source-links {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
-    max-width: 420px;
-    max-height: 260px;
-    overflow: auto
+    font-family: "SimSun", "宋体", serif;
+    font-size: 14px;
+    line-height: 1.5
 }
 
-.trace-source-popover-list .ant-tag {
+.trace-source-links-block {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-left: 3px solid #4096ff;
+    background: #f0f7ff
+}
+
+.trace-source-links-inline {
+    display: inline-flex;
+    margin: 4px 0 4px 8px;
+    padding: 5px 8px;
+    border-left: 3px solid #4096ff;
+    background: #f0f7ff;
+    text-indent: 0;
+    vertical-align: middle
+}
+
+.trace-source-label {
+    white-space: nowrap;
+    color: #333
+}
+
+.trace-source-links .ant-tag {
     cursor: pointer;
-    max-width: 100%;
     margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap
+    white-space: normal;
+    overflow-wrap: anywhere
+}
+
+.trace-source-links .ant-tag:hover {
+    color: #0958d9;
+    border-color: #1677ff;
+    background: #e6f4ff
 }
 
 .phase2-target-highlight {

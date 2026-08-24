@@ -1,4 +1,6 @@
-import {BadRequestException, ConflictException, Controller, ForbiddenException, Get, Put, Req, Body} from "@nestjs/common";
+import {BadRequestException, ConflictException, Controller, ForbiddenException, Get, Post, Put, Req, Body} from "@nestjs/common";
+import {Prisma} from "@prisma/client";
+import {hash} from "argon2";
 import {PrismaService} from "./prisma.js";
 import {mkdir, readFile, rename, writeFile} from "node:fs/promises";
 import path from "node:path";
@@ -12,6 +14,15 @@ const matrixPlugin = "file:///plugin/dist/index.js";
 
 function requireAdmin(request: any) {
     if (request.user?.role !== "ADMIN") throw new ForbiddenException("仅管理员可以修改系统设置")
+}
+
+export function validateNewUser(body: { username?: string; password?: string }) {
+    const username = typeof body.username === "string" ? body.username.trim() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!username) throw new BadRequestException("请输入用户名");
+    if (username.length > 64) throw new BadRequestException("用户名不能超过64个字符");
+    if (password.length < 8 || password.length > 128) throw new BadRequestException("初始密码长度必须为8至128个字符");
+    return {username, password}
 }
 
 async function healthy() {
@@ -29,6 +40,33 @@ async function healthy() {
 @Controller("settings")
 export class SettingsController {
     constructor(private db: PrismaService) {
+    }
+
+    @Post("users") async createUser(@Req() request: any, @Body() body: { username?: string; password?: string }) {
+        requireAdmin(request);
+        const {username, password} = validateNewUser(body);
+        const passwordHash = await hash(password);
+        try {
+            return await this.db.$transaction(async transaction => {
+                const user = await transaction.user.create({
+                    data: {username, passwordHash, role: "REVIEWER"},
+                    select: {id: true, username: true, role: true, createdAt: true}
+                });
+                await transaction.auditLog.create({data: {
+                    userId: request.user.id,
+                    action: "USER_CREATED",
+                    resourceType: "User",
+                    resourceId: user.id,
+                    detail: {username: user.username, role: user.role}
+                }});
+                return user
+            })
+        } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+                throw new ConflictException("用户名已存在")
+            }
+            throw error
+        }
     }
 
     @Get("opencode") async getOpenCode(@Req() request: any) {
