@@ -18,5 +18,7 @@ CMD ["npm", "--workspace", "@matrix/worker", "run", "start"]
 FROM base AS web-build
 COPY . .
 RUN npm --workspace @matrix/web run build
-FROM web-build AS web
-CMD ["npm", "--workspace", "@matrix/web", "exec", "vite", "preview", "--", "--host", "0.0.0.0", "--port", "80"]
+FROM nginx:1.27-alpine AS web
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=web-build /app/apps/web/dist /usr/share/nginx/html
+EXPOSE 80

@@ -18,7 +18,7 @@
 
 | 组件 | 技术 | 默认端口 | 作用 |
 | --- | --- | ---: | --- |
-| Web | React、TypeScript、Vite、Ant Design | `8080` | 项目管理、生成进度、文档预览与评审 |
+| Web | React、TypeScript、Vite、Ant Design、Nginx | `8080`（开发Compose）/`8089`（ARM离线） | 项目管理、生成进度、文档预览、评审及API统一入口 |
 | API | NestJS、Fastify、Prisma | `3000` | 认证、项目、评审、追溯、下载和系统设置接口 |
 | Worker | Node.js、BullMQ、OpenCode SDK | 无 | Phase 2任务执行、事件处理和DOCX结构索引 |
 | OpenCode | OpenCode Server + Matrix插件 | 容器内`4096` | 执行 `/matrix-phase2` |
@@ -107,6 +107,8 @@ docker compose logs --tail=100 api worker opencode
 使用 `.env` 中的 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录。
 
 ## Docker组件构建与部署
+
+生产镜像中的Web由Nginx提供静态页面，并将同源 `/api/` 请求代理到API服务。开发Compose仍保留API、PostgreSQL和MinIO调试端口；ARM离线Compose只向宿主机发布Web的 `8089` 端口。
 
 ### 构建全部或单个组件
 
@@ -219,6 +221,59 @@ WEB_ORIGIN=http://localhost:5173
 
 默认Compose没有向宿主机暴露Redis和OpenCode端口，因此完整API/Worker联调推荐在容器内进行。仅编译和单元测试时不需要启动全部服务。
 
+## ARM64离线部署
+
+项目支持在x86开发机上交叉构建Linux ARM64离线部署包。打包机需要Docker Buildx并可访问Docker Hub、npm和GitHub；目标服务器只需要Docker Engine，不需要网络或预装Compose。
+
+### 1. 在x86开发机生成离线包
+
+在PowerShell中执行：
+
+```powershell
+cd requirements-manager
+./scripts/build-arm64-offline.ps1
+```
+
+如需使用代理，先为当前终端设置代理环境变量，Docker Desktop也需要配置可访问的构建代理：
+
+```powershell
+./scripts/build-arm64-offline.ps1 -HostProxyUrl "http://127.0.0.1:7897"
+```
+
+脚本会同时生成目录 `release/requirements-manager-arm64-offline/` 和可直接交付的 `release/requirements-manager-arm64-offline.tar.gz`，其中包含ARM64镜像归档、Compose二进制、校验文件和服务器脚本。
+
+### 2. 在ARM64离线服务器安装
+
+```bash
+tar -xf requirements-manager-arm64-offline.tar.gz
+cd requirements-manager-arm64-offline
+chmod +x install.sh
+./install.sh
+```
+
+编辑 `.env`，将 `WEB_ORIGIN` 设置为服务器实际地址和端口，例如 `http://192.168.1.100:8089`，并替换全部默认密码。随后配置内网模型并启动：
+
+```bash
+vi .env
+vi data/opencode-config/opencode.json
+./start.sh
+./status.sh
+```
+
+浏览器访问 `http://服务器IP:8089`。ARM离线配置只发布 `8089:80`，API、PostgreSQL、Redis、MinIO和OpenCode不映射宿主机端口。
+
+### 3. 离线服务运维
+
+```bash
+./logs.sh             # 所有实时日志
+./logs.sh worker      # Worker日志
+./logs.sh opencode    # OpenCode与模型调用日志
+./stop.sh             # 停止并保留数据
+./start.sh            # 重新启动
+```
+
+部署数据保存在离线包目录下的 `data/`。详细说明见离线包中的 `README-OFFLINE.md`。
+
 ```bash
 npm run dev:api
 npm run dev:worker
@@ -316,6 +371,7 @@ Reviewer可以填写修改建议。评分按可评估章节独立保存，不对
 | `OPENCODE_PASSWORD` | OpenCode Basic Auth密码 | 必须修改 |
 | `PROJECTS_ROOT` | 项目共享目录 | `/data/projects` |
 | `WEB_ORIGIN` | 允许携带Cookie的前端来源 | `http://localhost:5173` |
+| `COOKIE_SECURE` | 是否仅通过HTTPS发送登录Cookie；HTTP部署必须为`false` | `false` |
 | `PHASE2_CONCURRENCY` | Worker并发任务数 | `2` |
 | `MAX_ARCHIVE_BYTES` | ZIP上传大小上限 | `1073741824` |
 | `MAX_EXTRACTED_BYTES` | 解压后总大小上限 | `5368709120` |

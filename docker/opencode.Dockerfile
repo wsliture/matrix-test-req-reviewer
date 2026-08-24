@@ -1,6 +1,12 @@
 FROM node:22-bookworm
+ARG TARGETARCH
 WORKDIR /plugin
-RUN npm install -g bun@1.3.6 opencode-linux-x64@1.18.18 opencode-ai@1.18.18
+RUN case "$TARGETARCH" in \
+      amd64) OPENCODE_PLATFORM_PACKAGE=opencode-linux-x64 ;; \
+      arm64) OPENCODE_PLATFORM_PACKAGE=opencode-linux-arm64 ;; \
+      *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && npm install -g bun@1.3.6 "${OPENCODE_PLATFORM_PACKAGE}@1.18.18" opencode-ai@1.18.18
 COPY package.json bun.lock ./
 RUN bun install --ignore-scripts
 COPY src src

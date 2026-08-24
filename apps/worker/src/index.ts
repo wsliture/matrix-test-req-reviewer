@@ -32,11 +32,15 @@ const STAGE_ARTIFACTS: Record<string, string> = {
     finalize_strength_test_content: "strength-test-content.json",
     generate_phase2_traceability: "phase2-test-traceability.json"
 };
-const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
-
-function verifyModelConfiguration() {
-    if (!process.env.DEEPSEEK_API_KEY?.trim()) {
-        throw new Error("未配置 DEEPSEEK_API_KEY，无法使用 DeepSeek V4 Flash 生成测试需求")
+async function configuredModel() {
+    const configPath = process.env.OPENCODE_CONFIG_PATH || "/opencode-config/opencode.json";
+    try {
+        const config = JSON.parse(await readFile(configPath, "utf8")) as {model?: unknown};
+        return typeof config.model === "string" && config.model.trim()
+            ? config.model.trim()
+            : "OpenCode默认模型"
+    } catch {
+        return "OpenCode当前配置模型"
     }
 }
 
@@ -173,8 +177,7 @@ new Worker("phase2", async job => {
     if (!await claim(runId)) return {cancelled: true};
     await event(runId, "run.started", {projectId: p.id});
     try {
-        verifyModelConfiguration();
-        await event(runId, "model.selected", {model: DEFAULT_MODEL, name: "DeepSeek V4 Flash"});
+        await event(runId, "model.selected", {model: await configuredModel()});
         if (await cancelled(runId)) return {cancelled: true};
         const created = await client.session.create({directory: p.workspacePath, title: `Phase 2 ${p.id}`});
         if (!created.data) throw new Error("创建OpenCode会话失败");

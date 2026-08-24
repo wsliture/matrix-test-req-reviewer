@@ -17,6 +17,13 @@ import {jwtVerify, SignJWT} from "jose";
 import {createHash, randomBytes} from "node:crypto";
 
 const secret = () => new TextEncoder().encode(process.env.JWT_SECRET || "development-secret-change-me-now");
+const secureCookies = () => process.env.COOKIE_SECURE?.trim().toLowerCase() === "true";
+const cookieOptions = (path: string) => ({
+    httpOnly: true,
+    sameSite: "strict" as const,
+    secure: secureCookies(),
+    path
+});
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -91,24 +98,14 @@ export class AuthController {
         password: string
     }, @Res({passthrough: true}) res: any) {
         const result = await this.auth.login(body.username, body.password);
-        res.setCookie("access_token", result.access, {
-            httpOnly: true,
-            sameSite: "strict",
-            secure: process.env.NODE_ENV === "production",
-            path: "/"
-        });
-        res.setCookie("refresh_token", result.refresh, {
-            httpOnly: true,
-            sameSite: "strict",
-            secure: process.env.NODE_ENV === "production",
-            path: "/api/auth"
-        });
+        res.setCookie("access_token", result.access, cookieOptions("/"));
+        res.setCookie("refresh_token", result.refresh, cookieOptions("/api/auth"));
         return result.user
     }
 
     @Post("logout") logout(@Res({passthrough: true}) res: any) {
-        res.clearCookie("access_token", {path: "/"});
-        res.clearCookie("refresh_token", {path: "/api/auth"});
+        res.clearCookie("access_token", cookieOptions("/"));
+        res.clearCookie("refresh_token", cookieOptions("/api/auth"));
         return {ok: true}
     }
 
@@ -117,8 +114,8 @@ export class AuthController {
         newPassword: string
     }, @Res({passthrough: true}) res: any) {
         const result = await this.auth.changePassword(req.user.id, body.currentPassword, body.newPassword);
-        res.clearCookie("access_token", {path: "/"});
-        res.clearCookie("refresh_token", {path: "/api/auth"});
+        res.clearCookie("access_token", cookieOptions("/"));
+        res.clearCookie("refresh_token", cookieOptions("/api/auth"));
         return result
     }
 

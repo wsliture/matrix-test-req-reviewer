@@ -43,7 +43,11 @@ services:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: worker }
     env_file: ${ENV_FILE:-.env}
     depends_on: [ postgres, redis, minio, opencode ]
-    volumes: [ projects:/data/projects ]
+    environment:
+      OPENCODE_CONFIG_PATH: /opencode-config/opencode.json
+    volumes:
+      - projects:/data/projects
+      - opencode-config:/opencode-config:ro
   web:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: web }
     ports: [ "8080:80" ]

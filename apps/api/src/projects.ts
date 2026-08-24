@@ -18,6 +18,7 @@ import {pipeline} from "node:stream/promises";
 import {safeExtract} from "./archive.js";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
+import {Prisma} from "@prisma/client";
 
 const documentQueue = new Queue("document-index", {connection: new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null})});
 
@@ -38,7 +39,7 @@ export class ProjectsService {
 
     list() {
         return this.db.project.findMany({
-            orderBy: {updatedAt: "desc"},
+            orderBy: [{createdAt: "desc"}, {id: "desc"}],
             include: {runs: {orderBy: {startedAt: "desc"}, take: 1}, documents: true}
         })
     }
@@ -79,12 +80,24 @@ export class ProjectsService {
         if (!file || !file.filename.toLowerCase().endsWith(".zip")) throw new BadRequestException("请上传ZIP压缩包");
         const name = String(file.fields?.name?.value || "").trim();
         if (!name || name.length > 100) throw new BadRequestException("项目名称长度必须为1至100个字符");
-        const root = process.env.PROJECTS_ROOT || "/data/projects", project = await this.db.project.create({
+        const existing = await this.db.project.findUnique({where: {name}, select: {id: true}});
+        if (existing) throw new ConflictException("项目名称已存在，请使用其他名称");
+        const root = process.env.PROJECTS_ROOT || "/data/projects";
+        let project;
+        try {
+            project = await this.db.project.create({
                 data: {
                     name,
                     workspacePath: "pending-" + Date.now()
                 }
-            }), workspace = path.join(root, project.id), archive = path.join(workspace, "upload.zip"),
+            })
+        } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+                throw new ConflictException("项目名称已存在，请使用其他名称")
+            }
+            throw error
+        }
+        const workspace = path.join(root, project.id), archive = path.join(workspace, "upload.zip"),
             extract = path.join(workspace, "source");
         try {
             await mkdir(workspace, {recursive: true});

@@ -46,7 +46,7 @@ model RefreshToken {
 }
 model Project {
   id String @id @default(cuid())
-  name String
+  name String @unique
   status ProjectStatus @default(IMPORTING)
   workspacePath String @unique
   missingArtifacts Json?

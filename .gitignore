@@ -24,3 +24,4 @@ uploads/
 minio-data/
 postgres-data/
 redis-data/
+release

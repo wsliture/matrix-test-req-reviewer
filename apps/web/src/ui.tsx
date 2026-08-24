@@ -99,8 +99,9 @@ function Login() {
         mutationFn: (v: {
             username: string,
             password: string
-        }) => api("/auth/login", {method: "POST", body: JSON.stringify(v)}), onSuccess: user => {
+        }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}), onSuccess: async user => {
             qc.setQueryData(["me"], user);
+            await qc.refetchQueries({queryKey: ["me"], type: "active"});
             nav("/", {replace: true})
         }
     });
@@ -241,7 +242,10 @@ function Projects() {
     return <Shell actions={settings}><Content className="page"><Space
         style={{width: "100%", justifyContent: "space-between"}}><Typography.Title level={3}>项目列表</Typography.Title><Button
         type="primary" icon={<PlusOutlined/>} onClick={() => setOpen(true)}>新建项目</Button></Space><Row
-        gutter={[16, 16]}>{query.data?.map(p => <Col xs={24} md={12} xl={8} key={p.id}><Card hoverable title={p.name}
+        gutter={[16, 16]}>{query.data?.slice().sort((left, right) => {
+            const createdAtDifference = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+            return createdAtDifference || right.id.localeCompare(left.id)
+        }).map(p => <Col xs={24} md={12} xl={8} key={p.id}><Card hoverable title={p.name}
                                                                                              onClick={() => location.href = `/projects/${p.id}`}
                                                                                              extra={<div
                                                                                                  data-project-action
@@ -270,9 +274,15 @@ function Projects() {
             createForm.resetFields()
         }} onOk={() => createForm.submit()}><Form form={createForm} layout="vertical" onFinish={values => {
         if (!archiveFile) return message.error("请选择源文档ZIP压缩包");
-        upload.mutate({name: values.name, file: archiveFile})
+        upload.mutate({name: values.name.trim(), file: archiveFile})
     }}><Form.Item name="name" label="项目名称" rules={[{required: true, whitespace: true, message: "请输入项目名称"},
-        {max: 100, message: "项目名称不能超过100个字符"}]}><Input placeholder="请输入项目名称"/></Form.Item>
+        {max: 100, message: "项目名称不能超过100个字符"},
+        {validator: (_, value) => {
+            const normalized = String(value || "").trim();
+            return normalized && query.data?.some(project => project.name === normalized)
+                ? Promise.reject(new Error("项目名称已存在，请使用其他名称"))
+                : Promise.resolve()
+        }}]}><Input placeholder="请输入项目名称"/></Form.Item>
         <Form.Item label="源文档压缩包" required><Upload.Dragger accept=".zip" maxCount={1}
             beforeUpload={file => {
                 setArchiveFile(file);
@@ -361,7 +371,7 @@ function eventText(item: RunEvent) {
     const mode = String(item.payload.mode || ""), stage = stageName(mode, item.payload.batchIndex);
     if (item.type === "run.queued") return "任务已进入执行队列";
     if (item.type === "run.started") return "Worker已开始执行任务";
-    if (item.type === "model.selected") return `使用模型：${String(item.payload.name || item.payload.model || "DeepSeek V4 Flash")}`;
+    if (item.type === "model.selected") return `使用模型：${String(item.payload.name || item.payload.model || "OpenCode当前配置模型")}`;
     if (item.type === "session.created") return "OpenCode会话创建成功";
     if (item.type === "command.started") return "已提交测试需求生成命令";
     if (item.type === "stage.running") return `开始：${stage}`;
