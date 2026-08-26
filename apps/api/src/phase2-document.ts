@@ -31,6 +31,20 @@ const TEST_TYPES = [
     ["TR-SC-XXX", "数据处理测试"], ["TR-HF-XXX", "恢复性测试"], ["TR-QD-XXX", "强度测试"],
     ["TR-DS-ALL", "代码审查"], ["TR-JF-ALL", "静态分析"], ["TR-LJ-ALL", "逻辑测试"]
 ];
+const BASE_CHAPTER1_REFERENCES = [
+    ["GJB/Z 141-2004", "军用软件测试指南"],
+    ["QJ 3027A-2016", "航天型号软件测试规范"],
+    ["Q/QJA 300-2014", "航天型号软件测试规范"],
+    ["GB/T 25000.51-2016", "系统与软件工程 系统与软件质量要求和评价（SQuaRE） 就绪可用软件产品（RUSP）的质量要求和测试细则"],
+    ["GB/T 25000.10-2016", "系统与软件工程 系统与软件质量要求和评价（SQuaRE） 系统与软件质量模型"],
+    ["五办[2011]479号", "五院航天器软件第三方测试管理办法"],
+    ["QMS-LAB-ST-CX01", "软件测试项目控制程序"]
+].map(([document_id, document_title]) => ({document_id, document_title}));
+const PROGRAMMING_LANGUAGE_REFERENCES: Record<string, {document_id: string; document_title: string}> = {
+    c: {document_id: "Q/W-Q80-18-01-2014", document_title: "航天器软件C语言编程约定"},
+    x86_assembly: {document_id: "Q/W 1141-2007", document_title: "航天器X86汇编语言软件编程约定"},
+    mcs51_assembly: {document_id: "Q/W 1139-2007", document_title: "航天器51汇编语言软件编程约定"}
+};
 const FILES = [
     ["chapter1-scope.json", "1", "范围"], ["chapter2-system-overview.json", "2", "系统概述"],
     ["hardware-interface-model.json", "3.1", "硬件接口"], ["functional-test-content.json", "4.1", "功能测试"],
@@ -64,6 +78,28 @@ const table = (caption: string, columns: string[], rows: unknown[][]): Phase2Blo
     rows: rows.map(row => row.map(item => text(item)))
 });
 const alpha = (index: number) => String.fromCharCode(97 + index);
+
+export function chapter1DisplayReferences(data: Json): {document_id: string; document_title: string}[] {
+    const programming = list(data.programming_languages)
+        .map(language => PROGRAMMING_LANGUAGE_REFERENCES[language])
+        .filter((item): item is {document_id: string; document_title: string} => Boolean(item));
+    const artifactReferences = Array.isArray(data.references) ? data.references : [];
+    const seen = new Set<string>();
+    return [...BASE_CHAPTER1_REFERENCES, ...programming, ...artifactReferences].filter((item: Json) => {
+        const key = text(item.document_id).toUpperCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true
+    }).map((item: Json) => ({document_id: text(item.document_id), document_title: text(item.document_title)}))
+}
+
+export function formatChapter2Processor(processorType: unknown, processorFrequency: unknown): string {
+    const type = text(processorType), frequency = text(processorFrequency);
+    if (type && frequency) return `CPU：${type}，主频：${frequency}`;
+    if (type) return `CPU：${type}`;
+    if (frequency) return `主频：${frequency}`;
+    return ""
+}
 
 function compressRequirementIds(ids: string[]) {
     const result: string[] = [];
@@ -99,7 +135,7 @@ function maps(requirements: any[]) {
 function chapter1(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const root = lookup.root(artifact), csci = list(data.csci_names).join("、"), documentId = text(data.document_id),
         renderedId = !documentId || documentId.endsWith(".RX1") ? documentId : `${documentId}.RX1`;
-    const references = Array.isArray(data.references) ? data.references : [];
+    const references = chapter1DisplayReferences(data);
     return [
         heading("1 范围", 1, root?.id, refs(data), root?.businessId, true), heading("1.1 标识", 2),
         paragraph(`a. 文档标识：${renderedId}，版本号：${text(data.document_version)}；`),
@@ -119,7 +155,7 @@ function chapter1(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
 function chapter2(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const root = lookup.root(artifact),
         blocks: Phase2Block[] = [heading("2 系统概述", 1, root?.id, refs(data), root?.businessId, true), heading("2.1 运行环境说明", 2)];
-    const processor = [text(data.processor_type), text(data.processor_frequency)].filter(Boolean).join("，");
+    const processor = formatChapter2Processor(data.processor_type, data.processor_frequency);
     blocks.push(paragraph(`a. ${text(data.system_relationship)}`), paragraph(`b. ${processor}`), paragraph(`c. ${text(data.memory_io_summary)}${data.memory_io_tables?.length ? `，具体见表2-1至表2-${data.memory_io_tables.length}。` : ""}`));
     (data.memory_io_tables || []).forEach((item: Json, index: number) => {
         const value = normalizedTable(item, `存储器及I/O说明表${index + 1}`);
@@ -128,7 +164,7 @@ function chapter2(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
         blocks.push(value)
     });
     const interruptNo = (data.memory_io_tables?.length || 0) + 1;
-    blocks.push(paragraph("d. 中断使用情况如下表："), table(`表2-${interruptNo}  中断使用说明`, ["中断名称", "中断号", "优先级", "用途"], (data.interrupts || []).map((item: Json) => [item.name || item.interrupt_name, item.number || item.interrupt_no, item.priority, item.purpose || item.description])));
+    blocks.push(paragraph("d. 中断使用情况如下表："), table(`表2-${interruptNo}  中断使用说明`, ["中断名称", "优先级", "周期（触发频率）/随机（频繁/偶发）", "触发方式", "执行功能"], (data.interrupts || []).map((item: Json) => [item.interrupt_name, item.priority, item.frequency_or_random, item.trigger_mode, item.execution_function])));
     blocks.push(heading("2.2 软件概述", 2), paragraph(`${text(data.software_name_and_id)}的软件级别为${text(data.software_level)}，采用${text(data.programming_language)}开发。`), paragraph("软件主要功能如下："), ...list(data.subsystem_and_software_functions).map((item, index) => paragraph(`${alpha(index)}. ${item}${/[；。]$/.test(item) ? "" : "；"}`)), heading("2.3 开发环境概述", 2), paragraph([text(data.development_platform), text(data.compilation_environment)].filter(Boolean).join("，") + "。"));
     return blocks
 }
