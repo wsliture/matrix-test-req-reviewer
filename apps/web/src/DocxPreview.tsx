@@ -2,7 +2,7 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {renderAsync} from "docx-preview";
 import {Alert, Button, Space, Spin, Tooltip} from "antd";
 import {MinusOutlined, PlusOutlined} from "@ant-design/icons";
-import type {DocumentNode} from "./api";
+import {authenticatedFetch, type DocumentNode} from "./api";
 
 const normalized = (value: string) => value.replace(/\s+/g, "").toLowerCase();
 const MIN_SCALE = 0.4, MAX_SCALE = 1.5, SCALE_STEP = 0.1;
@@ -49,7 +49,7 @@ export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onN
         setError(undefined);
         container.current.innerHTML = "";
         container.current.removeAttribute("style");
-        fetch(`/api/documents/${documentId}/file`, {credentials: "include"}).then(response => {
+        authenticatedFetch(`/api/documents/${documentId}/file`).then(response => {
             if (!response.ok) throw new Error(`DOCX加载失败（${response.status}）`);
             return response.arrayBuffer()
         }).then(buffer => renderAsync(buffer, container.current!, undefined, {

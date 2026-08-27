@@ -1,10 +1,13 @@
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
+import {createPortal} from "react-dom";
 import {
     Alert,
     Badge,
     Button,
     Card,
+    Checkbox,
     Col,
+    Drawer,
     Empty,
     Form,
     Input,
@@ -31,6 +34,7 @@ import {
 import {
     ArrowLeftOutlined,
     CheckCircleFilled,
+    CloseOutlined,
     CloseCircleFilled,
     DeleteOutlined,
     DownloadOutlined,
@@ -47,8 +51,12 @@ import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {
     api,
     ApiError,
+    resetAuthenticationState,
     downloadApi,
-    type MissingReview,
+    hasActiveAuthenticationMarker,
+    hadAuthenticatedSession,
+    markAuthenticated,
+    recoverSession,
     type CurrentUser,
     type Phase2Run,
     type Project,
@@ -57,6 +65,8 @@ import {
     type ReviewScores,
     type RunEvent,
     saveDownload,
+    type SessionStatus,
+    subscribeSessionStatus,
     type TraceLink
 } from "./api";
 import {DocxPreview} from "./DocxPreview";
@@ -98,18 +108,23 @@ function Login() {
     const nav = useNavigate(), qc = useQueryClient(), login = useMutation({
         mutationFn: (v: {
             username: string,
-            password: string
-        }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}), onSuccess: async user => {
+            password: string,
+            rememberMe: boolean
+        }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}, false), onSuccess: async user => {
+            await qc.cancelQueries({queryKey: ["me"]});
+            markAuthenticated();
             qc.setQueryData(["me"], user);
-            await qc.refetchQueries({queryKey: ["me"], type: "active"});
             nav("/", {replace: true})
         }
     });
     return <div className="login"><Card title="测试需求管理工具" style={{width: 420}}><Form layout="vertical"
+                                                                                            initialValues={{rememberMe: false}}
                                                                                             onFinish={v => login.mutate(v)}><Form.Item
         name="username" label="用户名" rules={[{required: true}]}><Input/></Form.Item><Form.Item name="password"
                                                                                                  label="密码"
-                                                                                                 rules={[{required: true}]}><Input.Password/></Form.Item>{login.error &&
+                                                                                                 rules={[{required: true}]}><Input.Password/></Form.Item><Form.Item
+        name="rememberMe" valuePropName="checked"><Checkbox>保持登录（30天）</Checkbox></Form.Item>{hadAuthenticatedSession() &&
+        <Alert type="warning" showIcon message="登录状态已失效，请重新登录"/>}{login.error &&
         <Alert type="error" message={login.error.message}/>}<Button block type="primary" htmlType="submit"
                                                                     loading={login.isPending}>登录</Button></Form></Card>
     </div>
@@ -122,6 +137,7 @@ function Shell({children, backTo, actions}: { children: React.ReactNode; backTo?
         className="grow"/>{actions}<Button
         ghost icon={<LogoutOutlined/>} onClick={async () => {
         await api("/auth/logout", {method: "POST"});
+        resetAuthenticationState();
         qc.setQueryData(["me"], null);
         nav("/login", {replace: true})
     }}>退出</Button></Header>{children}</Layout>
@@ -157,6 +173,7 @@ function Projects() {
             method: "POST", body: JSON.stringify(values)
         }), onSuccess: () => {
             message.success("密码修改成功，请重新登录");
+            resetAuthenticationState();
             qc.setQueryData(["me"], null);
             nav("/login", {replace: true})
         }
@@ -402,20 +419,32 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
                 active = false
             }
         }
-        setConnection("正在连接实时日志");
-        const source = new EventSource(`/api/phase2-runs/${run.id}/events`, {withCredentials: true});
-        source.addEventListener("run-events", raw => {
-            const rows = JSON.parse((raw as MessageEvent).data) as RunEvent[];
-            if (rows.length) {
-                merge(rows);
-                onEvents()
+        let source: EventSource | undefined, reconnectTimer: number | undefined;
+        const connect = () => {
+            if (!active) return;
+            setConnection("正在连接实时日志");
+            source = new EventSource(`/api/phase2-runs/${run.id}/events`, {withCredentials: true});
+            source.addEventListener("run-events", raw => {
+                const rows = JSON.parse((raw as MessageEvent).data) as RunEvent[];
+                if (rows.length) {
+                    merge(rows);
+                    onEvents()
+                }
+                setConnection("实时日志已连接")
+            });
+            source.onerror = () => {
+                source?.close();
+                setConnection("连接中断，正在恢复登录状态");
+                recoverSession().then(() => {
+                    if (active) reconnectTimer = window.setTimeout(connect, 500)
+                }).catch(() => setConnection("登录状态已失效"))
             }
-            setConnection("实时日志已连接")
-        });
-        source.onerror = () => setConnection("连接中断，正在自动重连");
+        };
+        connect();
         return () => {
             active = false;
-            source.close()
+            source?.close();
+            if (reconnectTimer) window.clearTimeout(reconnectTimer)
         }
     }, [run?.id, run?.status]);
     return <Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
@@ -460,14 +489,12 @@ function ProjectPage() {
     });
     if (query.isLoading) return <Shell><Spin/></Shell>;
     if (query.error) {
-        const expired = query.error instanceof ApiError && query.error.status === 401;
         return <Shell><Content className="page"><Alert type="warning" showIcon
-                                                       message={expired ? "登录已过期" : "项目不存在或已被删除"}
-                                                       description={expired ? "请重新登录后继续使用。" : query.error.message}
+                                                       message="项目不存在或已被删除"
+                                                       description={query.error.message}
                                                        action={<Button type="primary" onClick={() => {
-                                                           if (expired) qc.setQueryData(["me"], null);
-                                                           nav(expired ? "/login" : "/", {replace: true})
-                                                       }}>{expired ? "返回登录界面" : "返回项目列表"}</Button>}/></Content></Shell>
+                                                           nav("/", {replace: true})
+                                                       }}>返回项目列表</Button>}/></Content></Shell>
     }
     if (!query.data) return <Shell><Spin/></Shell>;
     const p = query.data, latest = p.runs[0];
@@ -499,6 +526,89 @@ function ProjectPage() {
 
 type TreeItem = { key: string; title: React.ReactNode; children?: TreeItem[] };
 
+type FloatingPosition = { x: number; y: number };
+
+function EvaluationWindow({open, children, loading, subject, onSubjectClick, onCancel, onSave}: {
+    open: boolean;
+    children: ReactNode;
+    loading: boolean;
+    subject?: string;
+    onSubjectClick?: () => void;
+    onCancel: () => void;
+    onSave: () => void
+}) {
+    const panelRef = useRef<HTMLDivElement>(null), dragRef = useRef<{x: number; y: number} | undefined>(undefined),
+        [position, setPosition] = useState<FloatingPosition>();
+    const clampPosition = (next: FloatingPosition) => {
+        const panel = panelRef.current, margin = 12,
+            width = panel?.offsetWidth || Math.min(520, window.innerWidth - margin * 2),
+            height = panel?.offsetHeight || Math.min(680, window.innerHeight - margin * 2);
+        return {
+            x: Math.min(Math.max(next.x, margin), Math.max(margin, window.innerWidth - width - margin)),
+            y: Math.min(Math.max(next.y, margin), Math.max(margin, window.innerHeight - height - margin))
+        }
+    };
+    useEffect(() => {
+        if (!open) return;
+        const frame = requestAnimationFrame(() => {
+            const panel = panelRef.current;
+            if (!panel) return;
+            setPosition(clampPosition({
+                x: (window.innerWidth - panel.offsetWidth) / 2,
+                y: (window.innerHeight - panel.offsetHeight) / 2
+            }))
+        });
+        return () => cancelAnimationFrame(frame)
+    }, [open]);
+    useEffect(() => {
+        if (!open) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+                if (event.key === "Escape") onCancel()
+            },
+            onResize = () => setPosition(current => current ? clampPosition(current) : current);
+        window.addEventListener("keydown", onKeyDown);
+        window.addEventListener("resize", onResize);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("resize", onResize)
+        }
+    }, [open, onCancel]);
+    if (!open) return null;
+    const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+            if ((event.target as HTMLElement).closest("button")) return;
+            const rect = panelRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            dragRef.current = {x: event.clientX - rect.left, y: event.clientY - rect.top};
+            event.currentTarget.setPointerCapture(event.pointerId)
+        },
+        drag = (event: ReactPointerEvent<HTMLDivElement>) => {
+            if (!dragRef.current) return;
+            setPosition(clampPosition({x: event.clientX - dragRef.current.x, y: event.clientY - dragRef.current.y}))
+        },
+        stopDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+            dragRef.current = undefined;
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+        };
+    return createPortal(<div ref={panelRef} className="evaluation-window" role="dialog" aria-modal="false"
+                             aria-labelledby="evaluation-window-title"
+                             style={position ? {left: position.x, top: position.y} : {visibility: "hidden"}}>
+        <div className="evaluation-window-titlebar" onPointerDown={startDrag} onPointerMove={drag}
+             onPointerUp={stopDrag} onPointerCancel={stopDrag}>
+            <div className="evaluation-window-heading">
+                <b id="evaluation-window-title">内容质量评估</b>
+                {subject && <button type="button" className="evaluation-window-subject" title={subject}
+                                    onClick={onSubjectClick}>{subject}</button>}
+            </div>
+            <Button type="text" icon={<CloseOutlined/>} aria-label="关闭内容质量评估" onClick={onCancel}/>
+        </div>
+        <div className="evaluation-window-body">{children}</div>
+        <div className="evaluation-window-footer">
+            <Button onClick={onCancel}>取消</Button>
+            <Button type="primary" loading={loading} onClick={onSave}>保存评估</Button>
+        </div>
+    </div>, window.document.body)
+}
+
 function treeOf<T extends {
     id: string;
     parentId?: string | null;
@@ -515,6 +625,7 @@ function treeOf<T extends {
 }
 
 function Review() {
+    const [reviewMessage, reviewMessageContext] = message.useMessage();
     const {id = ""} = useParams(),
         qc = useQueryClient(), [documentId, setDocumentId] = useState<string>(), [evalOpen, setEvalOpen] = useState(false),
         [evaluationTargetId, setEvaluationTargetId] = useState<string>(), [scores, setScores] = useState<ReviewScores>({
@@ -539,7 +650,10 @@ function Review() {
         });
     const [tracePopoverNodeId, setTracePopoverNodeId] = useState<string>();
     const [sourceNavigationKey, setSourceNavigationKey] = useState(0);
-    const [missingReviews, setMissingReviews] = useState<MissingReview[]>([]);
+    const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
+    const [reviewFilter, setReviewFilter] = useState<"all" | "reviewed" | "pending">("all");
+    const [reviewSearch, setReviewSearch] = useState("");
+    const [pendingAttention, setPendingAttention] = useState(false);
     const [mainSizes, setMainSizes] = useState<SplitSizes | undefined>(() => loadSplitSizes("main"));
     const [sourceDirectoryOpen, setSourceDirectoryOpen] = useState(false);
     const [requirementDirectoryOpen, setRequirementDirectoryOpen] = useState(false);
@@ -575,7 +689,23 @@ function Review() {
         for (const review of reviews.data || []) if (!latest.has(review.nodeId)) latest.set(review.nodeId, review);
         return latest
     }, [reviews.data]);
+    const evaluationTarget = requirements.find(item => item.id === evaluationTargetId);
     const reviewScores = useMemo(() => Object.fromEntries([...latestReviews].map(([nodeId, review]) => [nodeId, review.weightedScore])), [latestReviews]);
+    const requirementById = useMemo(() => new Map(requirements.map(item => [item.id, item])), [requirements]);
+    const reviewItems = useMemo(() => (data.data?.phase2Document?.chapters || []).flatMap(chapter => chapter.blocks)
+        .filter(block => block.type === "heading" && block.evaluable === true && Boolean(block.anchorId))
+        .map(block => {
+            const node = requirementById.get(block.anchorId!), review = latestReviews.get(block.anchorId!);
+            return {
+                id: block.anchorId!,
+                number: node?.number || "",
+                title: node?.title || block.text || "未命名评审项",
+                review
+            }
+        }), [data.data?.phase2Document?.chapters, requirementById, latestReviews]);
+    const reviewedCount = reviewItems.filter(item => Boolean(item.review)).length;
+    const pendingCount = reviewItems.length - reviewedCount;
+    const reviewPercent = reviewItems.length ? Math.round(reviewedCount / reviewItems.length * 100) : 0;
     const saveReview = useMutation({
         mutationFn: () => {
             if (!evaluationTargetId) throw new Error("未选择评估节点");
@@ -606,7 +736,10 @@ function Review() {
         },
         onError: error => {
             if (error instanceof ApiError && error.status === 409 && Array.isArray(error.details?.missingReviews)) {
-                setMissingReviews(error.details.missingReviews as MissingReview[])
+                setReviewCenterOpen(true);
+                setReviewFilter("pending");
+                setPendingAttention(true);
+                reviewMessage.warning("仍有测试需求尚未完成评审")
             } else message.error(error.message)
         }
     });
@@ -643,6 +776,10 @@ function Review() {
         total = scores.correctness * .4 + scores.coverage * .35 + scores.testability * .25,
         grade = total >= 4.5 ? "优秀" : total >= 3.5 ? "良好" : total >= 2.5 ? "合格" : "不合格",
         openEvaluation = (targetId: string) => {
+            if (evalOpen) {
+                reviewMessage.warning("已有内容质量评估窗口，请先保存或关闭当前窗口");
+                return false
+            }
             const latest = latestReviews.get(targetId);
             setRequirement(targetId);
             setEvaluationTargetId(targetId);
@@ -653,7 +790,8 @@ function Review() {
             });
             setReviewComment(latest?.comment || "");
             saveReview.reset();
-            setEvalOpen(true)
+            setEvalOpen(true);
+            return true
         };
     const uniqueTraceLinks = [...new Map((trace.data || []).map(link => [link.targetNodeId, link])).values()],
         sectionLinks = uniqueTraceLinks.filter(link => link.targetNode.nodeType !== "requirement"),
@@ -781,13 +919,48 @@ function Review() {
             }}>{documentPane}</div>
         </div>
     };
+    const normalizedSearch = reviewSearch.trim().toLowerCase();
+    const visibleReviewItems = reviewItems.filter(item => {
+        if (reviewFilter === "reviewed" && !item.review) return false;
+        if (reviewFilter === "pending" && item.review) return false;
+        return !normalizedSearch || `${item.number} ${item.title}`.toLowerCase().includes(normalizedSearch)
+    });
+    const reviewGroups = [
+        {key: "other", title: "其他章节", match: (number: string) => /^(1|2)(\.|$)/.test(number)},
+        {key: "hardware", title: "硬件接口", match: (number: string) => /^3\.1(?:\.|$)/.test(number)},
+        {key: "functional", title: "功能需求", match: (number: string) => /^4\.1(?:\.|$)/.test(number)},
+        {key: "nonfunctional", title: "非功能需求", match: (number: string) => /^4\.[2-9](?:\.|$)/.test(number)}
+    ].map(group => ({...group, items: visibleReviewItems.filter(item => group.match(item.number))}))
+        .filter(group => group.items.length);
+    const gotoReviewItem = (targetId: string) => {
+        setReviewCenterOpen(false);
+        gotoRequirement(targetId)
+    };
+    const evaluateReviewItem = (targetId: string) => {
+        if (!openEvaluation(targetId)) return;
+        setReviewCenterOpen(false);
+        gotoRequirement(targetId)
+    };
+    const handleReviewExport = () => {
+        if (pendingCount) {
+            setReviewFilter("pending");
+            setReviewSearch("");
+            setPendingAttention(true);
+            return
+        }
+        exportReport.mutate()
+    };
     const exportActions = <Space>
         <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
-        <Button type="primary" icon={<ExportOutlined/>} loading={exportReport.isPending}
-                onClick={() => exportReport.mutate()}>导出评审报告</Button>
+        <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
+                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>}
+                onClick={() => {
+                    setPendingAttention(false);
+                    setReviewCenterOpen(true)
+                }}>评审中心 {reviewedCount}/{reviewItems.length}</Button>
     </Space>;
-    return <Shell backTo={`/projects/${id}`} actions={exportActions}><Layout className="review trace-review">
+    return <Shell backTo={`/projects/${id}`} actions={exportActions}>{reviewMessageContext}<Layout className="review trace-review">
         <div className="review-splitter-reset review-main-reset" onDoubleClick={event => {
             if ((event.target as HTMLElement).closest(".review-splitter-reset") === event.currentTarget && (event.target as HTMLElement).closest(".ant-splitter-bar")) {
                 setMainSizes(["50%", "50%"]);
@@ -806,9 +979,11 @@ function Review() {
                 </Splitter.Panel>
             </Splitter>
         </div>
-        <Modal open={evalOpen} title="内容质量评估" okText="保存评估" cancelText="取消"
-               confirmLoading={saveReview.isPending} onCancel={() => setEvalOpen(false)}
-               onOk={() => saveReview.mutate()}>
+        <EvaluationWindow open={evalOpen} loading={saveReview.isPending}
+                          subject={evaluationTarget ? `${evaluationTarget.number ? `${evaluationTarget.number} ` : ""}${evaluationTarget.title}` : undefined}
+                          onSubjectClick={evaluationTargetId ? () => gotoRequirement(evaluationTargetId) : undefined}
+                          onCancel={() => setEvalOpen(false)}
+                          onSave={() => saveReview.mutate()}>
             <Evaluation scores={scores} setScores={setScores} comment={reviewComment} setComment={setReviewComment}/>
             {saveReview.error &&
                 <Alert type="error" showIcon message="评估保存失败" description={saveReview.error.message}/>}
@@ -816,14 +991,55 @@ function Review() {
                 5.0</Typography.Title><Tag
                 color={total >= 4.5 ? "green" : total >= 3.5 ? "blue" : total >= 2.5 ? "orange" : "red"}>{grade}</Tag>
             </div>
-        </Modal>
-        <Modal open={missingReviews.length > 0} title="尚有测试需求未完成评审"
-               footer={<Button type="primary" onClick={() => setMissingReviews([])}>知道了</Button>}
-               onCancel={() => setMissingReviews([])}>
-            <Alert type="warning" showIcon message="完成以下评审后才能导出报告"/>
-            <List className="missing-review-list" dataSource={missingReviews} renderItem={item =>
-                <List.Item><b>{item.number || "未编号"}</b><span>{item.title}</span></List.Item>}/>
-        </Modal>
+        </EvaluationWindow>
+        <Drawer className="review-center-drawer" width={520} title="评审中心" open={reviewCenterOpen}
+                onClose={() => setReviewCenterOpen(false)}
+                footer={<Button block type={pendingCount ? "default" : "primary"} icon={<ExportOutlined/>}
+                                loading={exportReport.isPending} onClick={handleReviewExport}>
+                    {pendingCount ? `还需完成 ${pendingCount} 项评审` : "导出评审报告"}
+                </Button>}>
+            <div className="review-center-summary">
+                <div><b>{reviewPercent}%</b><span>总体完成率</span></div>
+                <div><b>{reviewedCount}</b><span>已评</span></div>
+                <div><b>{pendingCount}</b><span>待评</span></div>
+            </div>
+            <Progress percent={reviewPercent} status={pendingCount ? "active" : "success"}/>
+            <div className="review-center-tools">
+                <Space.Compact block>
+                    {(["all", "reviewed", "pending"] as const).map(filter => <Button key={filter}
+                        type={reviewFilter === filter ? "primary" : "default"} onClick={() => {
+                        setReviewFilter(filter);
+                        setPendingAttention(false)
+                    }}>{filter === "all" ? "全部" : filter === "reviewed" ? "已评" : `待评 ${pendingCount}`}</Button>)}
+                </Space.Compact>
+                <Input allowClear value={reviewSearch} placeholder="搜索章节号或标题"
+                       onChange={event => setReviewSearch(event.target.value)}/>
+            </div>
+            {reviewGroups.length ? <div className="review-center-groups">{reviewGroups.map(group =>
+                <section key={group.key} className="review-center-group">
+                    <h3>{group.title}<Tag>{group.items.length}</Tag></h3>
+                    {group.items.map(item => <div key={item.id}
+                        className={`review-center-item${item.review ? " is-reviewed" : " is-pending"}${pendingAttention && !item.review ? " needs-attention" : ""}`}
+                        onClick={() => gotoReviewItem(item.id)}>
+                        <div className="review-center-item-main">
+                            <div className="review-center-item-title"><span>{item.number || "未编号"}</span>{item.title}</div>
+                            {item.review ? <div className="review-center-item-meta">
+                                <Tag color="blue">{item.review.weightedScore.toFixed(2)}</Tag>
+                                <Tag color={item.review.grade === "优秀" ? "green" : item.review.grade === "良好" ? "blue" : item.review.grade === "合格" ? "orange" : "red"}>{item.review.grade}</Tag>
+                                {item.review.comment && <Tooltip title={item.review.comment}
+                                    overlayClassName="review-center-comment-tooltip">
+                                    <span className="review-center-comment">{item.review.comment}</span>
+                                </Tooltip>}
+                            </div> : <Tag color="orange">待评</Tag>}
+                        </div>
+                        <Button className="review-center-item-action" size="small"
+                                type={item.review ? "default" : "primary"} onClick={event => {
+                            event.stopPropagation();
+                            evaluateReviewItem(item.id)
+                        }}>{item.review ? "查看/修改" : "开始评估"}</Button>
+                    </div>)}
+                </section>)}</div> : <Empty description="没有符合条件的评审项"/>}
+        </Drawer>
     </Layout></Shell>
 }
 
@@ -851,10 +1067,38 @@ function Evaluation({scores, setScores, comment, setComment}: {
 }
 
 export function App() {
+    const qc = useQueryClient(), [sessionStatus, setSessionStatus] = useState<SessionStatus>("ready");
     const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false});
+    useEffect(() => subscribeSessionStatus(setSessionStatus), []);
+    useEffect(() => {
+        // 登录成功会同步写入认证标记；即使React队列里仍残留一次旧的expired通知，
+        // 也不能再清空刚写入的当前用户，避免首次登录闪回登录页。
+        if (sessionStatus === "expired" && !hasActiveAuthenticationMarker()) qc.setQueryData(["me"], null)
+    }, [qc, sessionStatus]);
+    useEffect(() => {
+        if (!me.data) return;
+        let active = true;
+        const refresh = () => recoverSession().then(user => {
+            if (active) qc.setQueryData(["me"], user)
+        }).catch(() => undefined);
+        const timer = window.setInterval(refresh, 25 * 60 * 1000);
+        const onVisible = () => {
+            if (document.visibilityState === "visible") void refresh()
+        };
+        const onOnline = () => void refresh();
+        document.addEventListener("visibilitychange", onVisible);
+        window.addEventListener("online", onOnline);
+        return () => {
+            active = false;
+            window.clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+            window.removeEventListener("online", onOnline)
+        }
+    }, [me.data?.id, qc]);
     if (me.isLoading) return <Spin fullscreen/>;
-    return <Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
+    return <>{sessionStatus === "recovering" && <Alert className="session-recovery-banner" type="info" showIcon
+        message="正在恢复登录状态"/>}<Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/></Routes>
+        path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/></Routes></>
 }

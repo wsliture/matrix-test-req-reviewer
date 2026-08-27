@@ -40,6 +40,7 @@ model RefreshToken {
   id String @id @default(cuid())
   tokenHash String @unique
   userId String
+  rememberMe Boolean @default(false)
   expiresAt DateTime
   revokedAt DateTime?
   user User @relation(fields:[userId], references:[id], onDelete:Cascade)

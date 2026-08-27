@@ -18,18 +18,21 @@ import {createHash, randomBytes} from "node:crypto";
 
 const secret = () => new TextEncoder().encode(process.env.JWT_SECRET || "development-secret-change-me-now");
 const secureCookies = () => process.env.COOKIE_SECURE?.trim().toLowerCase() === "true";
-const cookieOptions = (path: string) => ({
+const ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
+const refreshTokenTtlSeconds = (rememberMe: boolean) => (rememberMe ? 30 : 7) * 86400;
+const cookieOptions = (path: string, maxAge?: number) => ({
     httpOnly: true,
-    sameSite: "strict" as const,
+    sameSite: "lax" as const,
     secure: secureCookies(),
-    path
+    path,
+    ...(maxAge ? {maxAge} : {})
 });
 
 @Injectable()
 export class AuthGuard implements CanActivate {
     async canActivate(context: ExecutionContext) {
         const request = context.switchToHttp().getRequest();
-        if (request.url?.includes("/auth/login") || request.url?.includes("/auth/logout")) return true;
+        if (["/auth/login", "/auth/refresh", "/auth/logout"].some(path => request.url?.includes(path))) return true;
         const token = request.cookies?.access_token;
         if (!token) throw new UnauthorizedException();
         try {
@@ -47,20 +50,57 @@ export class AuthService {
     constructor(private db: PrismaService) {
     }
 
-    async login(username: string, password: string) {
+    private signAccessToken(user: {id: string; role: string}) {
+        return new SignJWT({role: user.role}).setProtectedHeader({alg: "HS256"}).setSubject(user.id)
+            .setExpirationTime(`${ACCESS_TOKEN_TTL_SECONDS}s`).sign(secret())
+    }
+
+    private createRefreshToken(userId: string, rememberMe: boolean) {
+        const token = randomBytes(48).toString("base64url");
+        return {
+            token,
+            data: {
+                userId,
+                tokenHash: createHash("sha256").update(token).digest("hex"),
+                rememberMe,
+                expiresAt: new Date(Date.now() + refreshTokenTtlSeconds(rememberMe) * 1000)
+            }
+        }
+    }
+
+    async login(username: string, password: string, rememberMe = false) {
         const user = await this.db.user.findUnique({where: {username}});
         if (!user || !await verify(user.passwordHash, password)) throw new UnauthorizedException("用户名或密码错误");
-        const access = await new SignJWT({role: user.role}).setProtectedHeader({alg: "HS256"}).setSubject(user.id).setExpirationTime("15m").sign(secret());
-        const refresh = randomBytes(48).toString("base64url"),
-            tokenHash = createHash("sha256").update(refresh).digest("hex");
-        await this.db.refreshToken.create({
-            data: {
-                userId: user.id,
-                tokenHash,
-                expiresAt: new Date(Date.now() + 30 * 86400000)
-            }
+        const access = await this.signAccessToken(user), refresh = this.createRefreshToken(user.id, rememberMe);
+        await this.db.refreshToken.create({data: refresh.data});
+        return {user: {id: user.id, username: user.username, role: user.role}, access, refresh: refresh.token, rememberMe}
+    }
+
+    async refresh(token?: string) {
+        if (!token) throw new UnauthorizedException("登录状态已失效，请重新登录");
+        const tokenHash = createHash("sha256").update(token).digest("hex"), now = new Date();
+        const existing = await this.db.refreshToken.findUnique({where: {tokenHash}, include: {user: true}});
+        if (!existing || existing.revokedAt || existing.expiresAt <= now || !existing.user) {
+            throw new UnauthorizedException("登录状态已失效，请重新登录")
+        }
+        const next = this.createRefreshToken(existing.userId, existing.rememberMe);
+        await this.db.$transaction(async transaction => {
+            const revoked = await transaction.refreshToken.updateMany({
+                where: {id: existing.id, revokedAt: null, expiresAt: {gt: now}}, data: {revokedAt: now}
+            });
+            if (revoked.count !== 1) throw new UnauthorizedException("登录状态已失效，请重新登录");
+            await transaction.refreshToken.create({data: next.data})
         });
-        return {user: {id: user.id, username: user.username, role: user.role}, access, refresh}
+        return {
+            user: {id: existing.user.id, username: existing.user.username, role: existing.user.role},
+            access: await this.signAccessToken(existing.user), refresh: next.token, rememberMe: existing.rememberMe
+        }
+    }
+
+    async logout(token?: string) {
+        if (!token) return;
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        await this.db.refreshToken.updateMany({where: {tokenHash, revokedAt: null}, data: {revokedAt: new Date()}})
     }
 
     async current(token?: string) {
@@ -95,15 +135,24 @@ export class AuthController {
 
     @Post("login") async login(@Body() body: {
         username: string,
-        password: string
+        password: string,
+        rememberMe?: boolean
     }, @Res({passthrough: true}) res: any) {
-        const result = await this.auth.login(body.username, body.password);
-        res.setCookie("access_token", result.access, cookieOptions("/"));
-        res.setCookie("refresh_token", result.refresh, cookieOptions("/api/auth"));
+        const result = await this.auth.login(body.username, body.password, body.rememberMe === true);
+        res.setCookie("access_token", result.access, cookieOptions("/", ACCESS_TOKEN_TTL_SECONDS));
+        res.setCookie("refresh_token", result.refresh, cookieOptions("/api/auth", refreshTokenTtlSeconds(result.rememberMe)));
         return result.user
     }
 
-    @Post("logout") logout(@Res({passthrough: true}) res: any) {
+    @Post("refresh") async refresh(@Req() req: any, @Res({passthrough: true}) res: any) {
+        const result = await this.auth.refresh(req.cookies?.refresh_token);
+        res.setCookie("access_token", result.access, cookieOptions("/", ACCESS_TOKEN_TTL_SECONDS));
+        res.setCookie("refresh_token", result.refresh, cookieOptions("/api/auth", refreshTokenTtlSeconds(result.rememberMe)));
+        return result.user
+    }
+
+    @Post("logout") async logout(@Req() req: any, @Res({passthrough: true}) res: any) {
+        await this.auth.logout(req.cookies?.refresh_token);
         res.clearCookie("access_token", cookieOptions("/"));
         res.clearCookie("refresh_token", cookieOptions("/api/auth"));
         return {ok: true}

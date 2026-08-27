@@ -5,26 +5,133 @@ export class ApiError extends Error {
     }
 }
 
-export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const hasJsonBody = init.body !== undefined && !(init.body instanceof FormData);
-    const response = await fetch(`/api${url}`, {
-        ...init,
-        credentials: "include",
-        headers: {...(hasJsonBody ? {"Content-Type": "application/json"} : {}), ...init.headers}
-    });
-    if (!response.ok) {
-        const details = await response.json().catch(() => null);
-        throw new ApiError(details?.message || response.statusText, response.status, details || undefined)
+export type SessionStatus = "ready" | "recovering" | "expired";
+const AUTHENTICATED_KEY = "matrix-requirements-authenticated";
+const EXPIRED_NOTICE_KEY = "matrix-requirements-session-expired";
+let refreshPromise: Promise<CurrentUser> | undefined, sessionStatus: SessionStatus = "ready";
+const sessionListeners = new Set<(status: SessionStatus) => void>();
+
+function setSessionStatus(status: SessionStatus) {
+    sessionStatus = status;
+    sessionListeners.forEach(listener => listener(status))
+}
+
+export function subscribeSessionStatus(listener: (status: SessionStatus) => void) {
+    sessionListeners.add(listener);
+    listener(sessionStatus);
+    return () => {
+        sessionListeners.delete(listener)
     }
+}
+
+export function markAuthenticated() {
+    sessionStorage.setItem(AUTHENTICATED_KEY, "1");
+    sessionStorage.removeItem(EXPIRED_NOTICE_KEY);
+    setSessionStatus("ready")
+}
+
+export function clearAuthenticated() {
+    const wasAuthenticated = sessionStorage.getItem(AUTHENTICATED_KEY) === "1";
+    if (wasAuthenticated) sessionStorage.setItem(EXPIRED_NOTICE_KEY, "1");
+    sessionStorage.removeItem(AUTHENTICATED_KEY);
+    // 首次打开登录页时 /auth/me 和 /auth/refresh 返回401属于正常匿名状态，
+    // 不能标记为会话过期，否则第一次登录成功后残留的expired状态会清空me缓存并闪回登录页。
+    setSessionStatus(wasAuthenticated ? "expired" : "ready")
+}
+
+export function hasActiveAuthenticationMarker() {
+    return sessionStorage.getItem(AUTHENTICATED_KEY) === "1"
+}
+
+export function resetAuthenticationState() {
+    sessionStorage.removeItem(AUTHENTICATED_KEY);
+    sessionStorage.removeItem(EXPIRED_NOTICE_KEY);
+    setSessionStatus("ready")
+}
+
+export function hadAuthenticatedSession() {
+    return sessionStorage.getItem(EXPIRED_NOTICE_KEY) === "1"
+}
+
+async function parseError(response: Response) {
+    const details = await response.json().catch(() => null);
+    return new ApiError(details?.message || response.statusText, response.status, details || undefined)
+}
+
+async function performRefresh() {
+    const response = await fetch("/api/auth/refresh", {method: "POST", credentials: "include"});
+    if (response.status === 401 || response.status === 403) {
+        clearAuthenticated();
+        throw await parseError(response)
+    }
+    if (!response.ok) throw await parseError(response);
+    const user = await response.json() as CurrentUser;
+    markAuthenticated();
+    return user
+}
+
+async function refreshUnderBrowserLock() {
+    const locks = (navigator as Navigator & {
+        locks?: { request<T>(name: string, callback: () => Promise<T>): Promise<T> }
+    }).locks;
+    if (!locks) return performRefresh();
+    return locks.request("matrix-requirements-session-refresh", async () => {
+        const current = await fetch("/api/auth/me", {credentials: "include"}).catch(() => undefined);
+        if (current?.ok) {
+            const user = await current.json() as CurrentUser;
+            markAuthenticated();
+            return user
+        }
+        return performRefresh()
+    })
+}
+
+export function recoverSession(): Promise<CurrentUser> {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = (async () => {
+        let attempt = 0;
+        while (true) {
+            try {
+                const user = await refreshUnderBrowserLock();
+                setSessionStatus("ready");
+                return user
+            } catch (error) {
+                if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw error;
+                setSessionStatus("recovering");
+                if (!navigator.onLine) {
+                    await new Promise<void>(resolve => window.addEventListener("online", () => resolve(), {once: true}))
+                } else {
+                    const waits = [1000, 2000, 5000, 10000, 15000];
+                    await new Promise(resolve => setTimeout(resolve, waits[Math.min(attempt++, waits.length - 1)]))
+                }
+            }
+        }
+    })().finally(() => {
+        refreshPromise = undefined
+    });
+    return refreshPromise
+}
+
+export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true) {
+    const response = await fetch(input, {...init, credentials: "include"});
+    if (response.status !== 401 || !retry) return response;
+    await recoverSession();
+    return fetch(input, {...init, credentials: "include"})
+}
+
+export async function api<T>(url: string, init: RequestInit = {}, authRetry = true): Promise<T> {
+    const hasJsonBody = init.body !== undefined && !(init.body instanceof FormData);
+    const response = await authenticatedFetch(`/api${url}`, {
+        ...init,
+        headers: {...(hasJsonBody ? {"Content-Type": "application/json"} : {}), ...init.headers}
+    }, authRetry);
+    if (!response.ok) throw await parseError(response);
     return response.json()
 }
 
 export async function downloadApi(url: string) {
-    const response = await fetch(`/api${url}`, {credentials: "include"});
-    if (!response.ok) {
-        const details = await response.json().catch(() => null);
-        throw new ApiError(details?.message || response.statusText, response.status, details || undefined)
-    }
+    const response = await authenticatedFetch(`/api${url}`);
+    if (!response.ok) throw await parseError(response);
     const disposition = response.headers.get("Content-Disposition") || "";
     const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
     const plain = disposition.match(/filename="([^"]+)"/i)?.[1];

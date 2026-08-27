@@ -118,12 +118,22 @@ Invoke-Download $ComposeUrl $ComposePath $HostProxyUrl
 Write-Host "导出ARM64镜像归档，文件可能较大..."
 Invoke-Checked "docker" (@("image", "save", "-o", $ImagesArchive) + $AllImages)
 
-$ArchiveHash = (Get-FileHash $ImagesArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-$ComposeHash = (Get-FileHash $ComposePath -Algorithm SHA256).Hash.ToLowerInvariant()
-@"
-$ArchiveHash  requirements-manager-arm64-images.tar
-$ComposeHash  bin/docker-compose
-"@ | Set-Content (Join-Path $OutputPath "SHA256SUMS") -Encoding ascii
+$IntegrityFiles = @(
+  "requirements-manager-arm64-images.tar",
+  "bin/docker-compose",
+  "docker-compose.yml",
+  ".env.example",
+  "data/opencode-config/opencode.json.example",
+  "README-OFFLINE.md"
+) + (Get-ChildItem $OutputPath -Filter "*.sh" -File | ForEach-Object { $_.Name })
+$IntegrityLines = $IntegrityFiles |
+  Sort-Object -Unique |
+  ForEach-Object {
+    $AbsolutePath = Join-Path $OutputPath $_
+    $Hash = (Get-FileHash $AbsolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$Hash  $($_ -replace '\\', '/')"
+  }
+$IntegrityLines | Set-Content (Join-Path $OutputPath "SHA256SUMS") -Encoding ascii
 
 $Manifest = [ordered]@{
   generatedAt = (Get-Date).ToString("o")

@@ -274,6 +274,16 @@ vi data/opencode-config/opencode.json
 
 部署数据保存在离线包目录下的 `data/`。详细说明见离线包中的 `README-OFFLINE.md`。
 
+### 4. 一键升级且保留服务器数据
+
+将新版离线包解压到独立目录，不要覆盖旧部署目录，然后从新版目录运行：
+
+```bash
+./upgrade.sh /opt/requirements-manager-arm64-offline
+```
+
+升级脚本会在数据库迁移前自动生成PostgreSQL逻辑备份和完整持久化数据归档，保留旧部署的 `data/`、`.env` 与OpenCode配置，再导入镜像并启动、检查全部核心服务。备份默认位于旧部署目录同级的 `requirements-manager-backups/时间戳/`。完整升级、验收和回滚说明见离线包中的 `README-OFFLINE.md`。
+
 ```bash
 npm run dev:api
 npm run dev:worker
