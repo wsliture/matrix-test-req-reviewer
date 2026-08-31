@@ -7,6 +7,7 @@ import {access, readFile, stat} from "node:fs/promises";
 import path from "node:path";
 import {missingCompletionStages, parseToolOutput, progressOf} from "./progress.js";
 import {indexProject} from "./indexing.js";
+import {startPhase2EditWorker} from "./phase2-edit.js";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null}),
     db = new Pool({connectionString: process.env.DATABASE_URL}),
@@ -229,6 +230,8 @@ new Worker("document-index", async job => {
     return {ok: true}
 }, {connection, concurrency: 2}).on("error", error => console.error("Document index worker error", error));
 
+startPhase2EditWorker(connection, db).on("error", error => console.error("Phase2 edit worker error", error));
+
 setTimeout(async () => {
     try {
         const projects = await db.query(`select p.id,p."workspacePath" from "Project" p where
@@ -256,3 +259,13 @@ setTimeout(async () => {
         console.error("Stale Phase2 run recovery failed", error)
     }
 }, 2000);
+
+setTimeout(async () => {
+    try {
+        const stale = await db.query(`select id,"projectId","backupPath" from "Phase2EditRun" where status='RUNNING'`);
+        for (const run of stale.rows) {
+            await db.query(`update "Phase2EditRun" set status='FAILED',"errorMessage"='编辑worker重启，任务已停止；备份保留供诊断',"finishedAt"=now() where id=$1`, [run.id]);
+            await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1 and status='REBUILDING'`, [run.projectId])
+        }
+    } catch (error) { console.error("Stale Phase2 edit recovery failed", error) }
+}, 2500);

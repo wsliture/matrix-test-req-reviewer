@@ -9,10 +9,11 @@ import {DocumentsController} from "./documents.js";
 import {TraceabilityController, TraceabilityService} from "./traceability.js";
 import {ExportsController} from "./exports.js";
 import {SettingsController} from "./settings.js";
+import {Phase2EditsController, Phase2EditsService} from "./phase2-edits.js";
 
 @Module({
-    controllers: [AuthController, ProjectsController, RunsController, ReviewsController, DocumentsController, TraceabilityController, ExportsController, SettingsController],
-    providers: [PrismaService, AuthService, ProjectsService, RunsService, TraceabilityService, {
+    controllers: [AuthController, ProjectsController, RunsController, ReviewsController, DocumentsController, TraceabilityController, ExportsController, SettingsController, Phase2EditsController],
+    providers: [PrismaService, AuthService, ProjectsService, RunsService, TraceabilityService, Phase2EditsService, {
         provide: APP_GUARD,
         useClass: AuthGuard
     }]

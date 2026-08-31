@@ -21,6 +21,8 @@ export class RunsService {
     async create(projectId: string) {
         const active = await this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
         if (active) throw new ConflictException("该项目已有Phase 2任务");
+        const edit = await this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+        if (edit) throw new ConflictException("该项目正在编辑重建");
         const run = await this.db.phase2Run.create({data: {projectId}});
         await this.db.project.update({where: {id: projectId}, data: {status: "GENERATING"}});
         await this.db.runEvent.create({data: {runId: run.id, type: "run.queued", payload: {projectId}}});

@@ -195,7 +195,7 @@ export type TraceLink = {
     targetNode: RequirementNode
 };
 export type Phase2Block = {
-    type: "heading" | "paragraph" | "list" | "table" | "error";
+    type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "error";
     text?: string;
     level?: number;
     anchorId?: string;
@@ -204,11 +204,33 @@ export type Phase2Block = {
     sourceRefs?: string[];
     items?: string[];
     caption?: string;
+    captionParts?: Phase2TextPart[];
     columns?: string[];
     rows?: string[][];
     cells?: { text: string; colSpan?: number; rowSpan?: number }[][];
-    rowAnchorIds?: (string | undefined)[]
+    rowAnchorIds?: (string | undefined)[];
+    parts?: Phase2TextPart[];
+    itemBindings?: (Phase2EditBinding | undefined)[];
+    cellBindings?: (Phase2EditBinding | undefined)[][];
+    headerBindings?: (Phase2EditBinding | undefined)[];
+    tableBinding?: Phase2TableBinding;
+    selectionBinding?: Phase2EditBinding;
+    selectionRole?: "概述" | "输入流" | "输出流";
+    selectionEditKey?: string;
+    sourceTableId?: string;
+    rowSourceBindings?: (Phase2EditBinding | undefined)[];
+    sourceBinding?: Phase2EditBinding;
+    requirementBinding?: Phase2RequirementBinding;
+    requirementKey?: string;
+    rowRequirementKeys?: string[]
 };
+export type Phase2EditBinding = {edit_key: string; node_id: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]};
+export type Phase2RequirementBinding = {container_key: string; allow_add: boolean; prefix: string; mode: "functional" | "non_functional" | "interface"; interface_label?: string};
+export type Phase2TableBinding = {container_key: string; allow_add_row: boolean; allow_delete_row: boolean; allow_add_column: boolean; allow_delete_column: boolean; row_keys: string[]; column_keys: string[]; new_row_columns?: string[]};
+export type Phase2AddedColumnDraft = {title: string; values: string[]};
+export type Phase2TableOperation = {container_key: string; operation: "add_row" | "delete_row" | "add_column" | "delete_column"; row_key?: string; column_key?: string; initial_value?: string | string[] | Record<string, string> | Phase2AddedColumnDraft; draft_key?: string};
+export type Phase2RequirementOperation = {container_key: string; operation: "add_requirement" | "delete_requirement"; requirement_key?: string; requested_suffix?: string; initial_value?: {content?: string; description?: string; related_description?: string; source_refs: string[]}; draft_key?: string};
+export type Phase2TextPart = {text: string; editable?: false} | {text: string; editable: true; binding: Phase2EditBinding};
 export type Phase2Chapter = {
     artifact: string;
     number: string;
@@ -247,3 +269,11 @@ export type Phase2Run = {
     finishedAt?: string;
     events?: RunEvent[]
 };
+export type EditorField = {key: string; label: string; type: "text" | "json" | "source_refs"; required?: boolean};
+export type SourceRefOption = {value: string; role: string; document_name: string; number: string; title: string; path_titles?: string[]};
+export type SourceTableOption = {table_id: string; title: string; source_ref: string; document_name: string; section_number: string; section_title: string; section_path_titles?: string[]; table_html: string; selected_location?: string; order: number};
+export type Phase2EditorDescriptor = {artifact: string; business_id?: string; revision: string;
+    operation_capabilities: {update: boolean; add: boolean; delete: boolean}; form_schema: EditorField[];
+    value: Record<string, unknown>; available_source_refs: SourceRefOption[]};
+export type Phase2EditRun = {id: string; status: string; progress: number; currentStage?: string; errorMessage?: string; finishedAt?: string};
+export type Phase2InlineDescriptor = {revision: string; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};

@@ -39,6 +39,9 @@ import {
     DeleteOutlined,
     DownloadOutlined,
     ExportOutlined,
+    EditOutlined,
+    EyeOutlined,
+    SaveOutlined,
     FileZipOutlined,
     LogoutOutlined,
     MenuUnfoldOutlined,
@@ -59,6 +62,11 @@ import {
     recoverSession,
     type CurrentUser,
     type Phase2Run,
+    type Phase2EditRun,
+    type Phase2EditBinding,
+    type Phase2InlineDescriptor,
+    type Phase2RequirementOperation,
+    type Phase2TableOperation,
     type Project,
     type ReviewData,
     type ReviewRecord,
@@ -130,12 +138,13 @@ function Login() {
     </div>
 }
 
-function Shell({children, backTo, actions}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode }) {
+function Shell({children, backTo, actions, beforeLeave}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean }) {
     const nav = useNavigate(), qc = useQueryClient();
     return <Layout className="shell"><Header className="header"><b>Matrix测试需求管理</b>{backTo &&
-        <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => nav(backTo)}>返回项目</Button>}<span
+        <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>返回项目</Button>}<span
         className="grow"/>{actions}<Button
         ghost icon={<LogoutOutlined/>} onClick={async () => {
+        if (beforeLeave && !beforeLeave()) return;
         await api("/auth/logout", {method: "POST"});
         resetAuthenticationState();
         qc.setQueryData(["me"], null);
@@ -647,13 +656,48 @@ function Review() {
             queryKey: ["reviews", id],
             queryFn: () => api<ReviewRecord[]>(`/projects/${id}/reviews`),
             retry: false
-        });
+        }), projectState = useQuery({queryKey: ["project", id], queryFn: () => api<Project>(`/projects/${id}`), refetchInterval: 2000});
     const [tracePopoverNodeId, setTracePopoverNodeId] = useState<string>();
     const [sourceNavigationKey, setSourceNavigationKey] = useState(0);
     const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
     const [reviewFilter, setReviewFilter] = useState<"all" | "reviewed" | "pending">("all");
     const [reviewSearch, setReviewSearch] = useState("");
     const [pendingAttention, setPendingAttention] = useState(false);
+    const [documentEditing, setDocumentEditing] = useState(false);
+    const [editorDrafts, setEditorDrafts] = useState<Record<string, unknown>>({});
+    const [sourceEditBinding, setSourceEditBinding] = useState<Phase2EditBinding>();
+    const [tableEditBinding, setTableEditBinding] = useState<Phase2EditBinding>();
+    const [sourceModalValues, setSourceModalValues] = useState<string[]>([]);
+    const [tableModalValues, setTableModalValues] = useState<string[]>([]);
+    const [sourcePickerSearch, setSourcePickerSearch] = useState("");
+    const [tablePickerSearch, setTablePickerSearch] = useState("");
+    const [tablePreviewId, setTablePreviewId] = useState<string>();
+    const [tableOperations, setTableOperations] = useState<Phase2TableOperation[]>([]);
+    const [requirementOperations, setRequirementOperations] = useState<Phase2RequirementOperation[]>([]);
+    const [editRunId, setEditRunId] = useState<string>();
+    useEffect(() => {
+        if (!documentEditing) return;
+        const warnAboutUnsubmittedForm = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = "有表单仍未提交";
+            return event.returnValue
+        };
+        window.addEventListener("beforeunload", warnAboutUnsubmittedForm);
+        return () => window.removeEventListener("beforeunload", warnAboutUnsubmittedForm)
+    }, [documentEditing]);
+    const inlineEditor = useQuery({queryKey: ["phase2-editor-inline", id],
+        queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`), enabled: documentEditing});
+    const editRun = useQuery({queryKey: ["phase2-edit-run", editRunId],
+        queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
+        refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
+    const rebuilding = projectState.data?.status === "REBUILDING" || Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
+    useEffect(() => { if (editRun.data?.status === "SUCCEEDED") { setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined); void qc.invalidateQueries({queryKey: ["review-data", id]}); void qc.invalidateQueries({queryKey: ["reviews", id]}) } }, [editRun.data?.status, id, qc]);
+    const saveInlineEdit = useMutation({mutationFn: () => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
+        method: "POST", body: JSON.stringify({expected_revision: inlineEditor.data?.revision,
+            changes: Object.entries(editorDrafts).map(([edit_key, value]) => ({edit_key, value})),
+            table_operations: tableOperations.map(({draft_key: _draftKey, ...operation}) => operation),
+            requirement_operations: requirementOperations.map(({draft_key: _draftKey, ...operation}) => operation)})
+    }), onSuccess: run => setEditRunId(run.id)});
     const [mainSizes, setMainSizes] = useState<SplitSizes | undefined>(() => loadSplitSizes("main"));
     const [sourceDirectoryOpen, setSourceDirectoryOpen] = useState(false);
     const [requirementDirectoryOpen, setRequirementDirectoryOpen] = useState(false);
@@ -884,7 +928,48 @@ function Review() {
     const requirementDocument = <main className="document requirement-pane review-document-pane"><Phase2DocumentRenderer
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}
         activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation}
-        reviewScores={reviewScores}/></main>;
+        reviewScores={reviewScores} editing={documentEditing} drafts={editorDrafts}
+        onDraft={(binding, value) => setEditorDrafts(current => ({...current, [binding.edit_key]: value}))}
+        onEditSources={binding => {
+            setSourceEditBinding(binding);
+            setSourceModalValues([...((editorDrafts[binding.edit_key] ?? binding.value) as string[])]);
+            setSourcePickerSearch("")
+        }} onEditTables={binding => {
+            setTableEditBinding(binding);
+            setTableModalValues([...((editorDrafts[binding.edit_key] ?? binding.value) as string[])]);
+            setTablePickerSearch("");
+            setTablePreviewId(undefined)
+        }} tableOperations={tableOperations} requirementOperations={requirementOperations}
+        availableTables={inlineEditor.data?.available_tables || []}
+        availableSourceRefs={inlineEditor.data?.available_source_refs || []}
+        onTableOperation={operation => setTableOperations(current => {
+            if (operation.draft_key) {
+                const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
+                if (duplicate >= 0) {
+                    if (operation.initial_value === undefined) return current.filter((_, index) => index !== duplicate);
+                    return current.map((item, index) => index === duplicate ? operation : item)
+                }
+            }
+            if (operation.operation === "delete_row" || operation.operation === "delete_column") {
+                const duplicate = current.findIndex(item => item.operation === operation.operation && item.container_key === operation.container_key
+                    && item.row_key === operation.row_key && item.column_key === operation.column_key);
+                if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
+            }
+            return [...current, operation]
+        })} onRequirementOperation={operation => setRequirementOperations(current => {
+            if (operation.draft_key) {
+                const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
+                if (duplicate >= 0) {
+                    if (operation.initial_value === undefined) return current.filter((_, index) => index !== duplicate);
+                    return current.map((item, index) => index === duplicate ? operation : item)
+                }
+            }
+            if (operation.operation === "delete_requirement") {
+                const duplicate = current.findIndex(item => item.operation === operation.operation && item.requirement_key === operation.requirement_key);
+                if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
+            }
+            return [...current, operation]
+        })} readOnly={rebuilding}/></main>;
     const persist = (name: string, setter: (sizes: SplitSizes) => void, threshold: number, bothSides: boolean) => (sizes: number[]) => {
         const next = snappedSizes(sizes, threshold, bothSides);
         setter(next);
@@ -950,17 +1035,48 @@ function Review() {
         }
         exportReport.mutate()
     };
+    const sourceOptions = [...new Map((inlineEditor.data?.available_source_refs || []).map(option => [option.value, option])).values()];
+    const sourceLabel = (value: string) => {
+        const option = sourceOptions.find(item => item.value === value);
+        return option ? `${option.document_name} ${option.number || option.title}` : value
+    };
+    const tableOptions = inlineEditor.data?.available_tables || [];
+    const tableDocumentName = (value: string) => value.split(/[\\/]/).filter(Boolean).at(-1) || value;
+    const tableLabel = (value: string) => {
+        const option = tableOptions.find(item => item.table_id === value);
+        return option ? `${tableDocumentName(option.document_name)} ${option.section_number || option.section_title} · ${option.title}` : value
+    };
+    const sourceNeedle = sourcePickerSearch.trim().toLowerCase();
+    const visibleSourceOptions = sourceOptions.filter(option => !sourceNeedle || [option.document_name, option.number, option.title, ...(option.path_titles || [])]
+        .join(" ").toLowerCase().includes(sourceNeedle));
+    const tableNeedle = tablePickerSearch.trim().toLowerCase();
+    const visibleTableOptions = tableOptions.filter(option => tableNeedle
+        ? [option.document_name, option.section_number, option.section_title, option.title].join(" ").toLowerCase().includes(tableNeedle)
+        : tableModalValues.includes(option.table_id)).slice(0, 30);
+    const previewTable = tableOptions.find(option => option.table_id === tablePreviewId);
+    const toggleTableSelection = (tableId: string, checked?: boolean) => setTableModalValues(current => {
+        const shouldSelect = checked ?? !current.includes(tableId);
+        return shouldSelect ? [...new Set([...current, tableId])] : current.filter(item => item !== tableId)
+    });
     const exportActions = <Space>
-        <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
+        {!documentEditing ? <Button ghost icon={<EditOutlined/>} disabled={rebuilding}
+            onClick={() => { setEditorDrafts({}); setDocumentEditing(true) }}>编辑文档</Button> : <>
+            <Button ghost disabled={rebuilding} onClick={() => { setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined) }}>放弃修改</Button>
+            <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
+                disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading}
+                onClick={() => saveInlineEdit.mutate()}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
+        </>}
+        <Button ghost icon={<DownloadOutlined/>} disabled={rebuilding} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
         <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
-                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>}
+                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={rebuilding}
                 onClick={() => {
                     setPendingAttention(false);
                     setReviewCenterOpen(true)
                 }}>评审中心 {reviewedCount}/{reviewItems.length}</Button>
     </Space>;
-    return <Shell backTo={`/projects/${id}`} actions={exportActions}>{reviewMessageContext}<Layout className="review trace-review">
+    const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
+    return <Shell backTo={`/projects/${id}`} actions={exportActions} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
         <div className="review-splitter-reset review-main-reset" onDoubleClick={event => {
             if ((event.target as HTMLElement).closest(".review-splitter-reset") === event.currentTarget && (event.target as HTMLElement).closest(".ant-splitter-bar")) {
                 setMainSizes(["50%", "50%"]);
@@ -992,6 +1108,87 @@ function Review() {
                 color={total >= 4.5 ? "green" : total >= 3.5 ? "blue" : total >= 2.5 ? "orange" : "red"}>{grade}</Tag>
             </div>
         </EvaluationWindow>
+        <Modal title="编辑追溯来源" width={760} open={Boolean(sourceEditBinding)} onCancel={() => setSourceEditBinding(undefined)}
+            onOk={() => {
+                if (sourceEditBinding) setEditorDrafts(current => ({...current, [sourceEditBinding.edit_key]: sourceModalValues}));
+                setSourceEditBinding(undefined)
+            }} okText="确定" cancelText="取消">
+            <div className="phase2-picker-selected">
+                <div className="phase2-picker-section-title">已选择 {sourceModalValues.length} 项</div>
+                <div className="phase2-picker-tags">{sourceModalValues.length ? sourceModalValues.map(value => <Tag closable key={value}
+                    onClose={event => { event.preventDefault(); setSourceModalValues(current => current.filter(item => item !== value)) }}>{sourceLabel(value)}</Tag>) :
+                    <span className="phase2-picker-empty-inline">尚未选择追溯来源</span>}</div>
+            </div>
+            <Input allowClear className="phase2-picker-search" placeholder="搜索文件名、章节号或标题" value={sourcePickerSearch}
+                onChange={event => setSourcePickerSearch(event.target.value)}/>
+            <div className="phase2-picker-results phase2-source-picker-results">{visibleSourceOptions.length ? visibleSourceOptions.map(option => {
+                const checked = sourceModalValues.includes(option.value);
+                return <label key={option.value} className={`phase2-source-option${checked ? " is-selected" : ""}`}>
+                    <Checkbox checked={checked} onChange={event => setSourceModalValues(current => event.target.checked
+                        ? [...new Set([...current, option.value])] : current.filter(item => item !== option.value))}/>
+                    <span><b>{option.document_name} {option.number || option.title}</b>{option.number && option.title ? <small>{option.title}</small> : null}</span>
+                </label>
+            }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的追溯来源"/>}</div>
+        </Modal>
+        <Modal title="选择硬件接口引用表格" width={960} open={Boolean(tableEditBinding)} onCancel={() => {
+            setTableEditBinding(undefined);
+            setTablePreviewId(undefined)
+        }}
+            onOk={() => {
+                if (tableEditBinding) setEditorDrafts(current => ({...current, [tableEditBinding.edit_key]: tableModalValues}));
+                setTableEditBinding(undefined);
+                setTablePreviewId(undefined)
+            }} okText="确定" cancelText="取消">
+            <div className="phase2-picker-selected">
+                <div className="phase2-picker-section-title">已选择 {tableModalValues.length} 张</div>
+                <div className="phase2-picker-tags">{tableModalValues.length ? tableModalValues.map(value => <Tag closable key={value}
+                    onClose={event => { event.preventDefault(); setTableModalValues(current => current.filter(item => item !== value)) }}>{tableLabel(value)}</Tag>) :
+                    <span className="phase2-picker-empty-inline">尚未选择引用表格</span>}</div>
+            </div>
+            <Input allowClear className="phase2-picker-search" placeholder="搜索文件名、章节号、章节标题或表题" value={tablePickerSearch}
+                onChange={event => setTablePickerSearch(event.target.value)}/>
+            {!tableNeedle && !tableModalValues.length ? <Empty className="phase2-picker-search-hint" image={Empty.PRESENTED_IMAGE_SIMPLE} description="输入关键字搜索引用表格"/> :
+                <div className="phase2-picker-results phase2-table-picker-results">{visibleTableOptions.length ? visibleTableOptions.map(option => {
+                    const checked = tableModalValues.includes(option.table_id);
+                    const documentName = tableDocumentName(option.document_name);
+                    const chapter = option.section_number || option.section_title;
+                    return <div className={`phase2-table-option${checked ? " is-selected" : ""}`} key={option.table_id}
+                        role="checkbox" aria-checked={checked} tabIndex={0} onClick={() => toggleTableSelection(option.table_id)}
+                        onKeyDown={event => {
+                            if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                toggleTableSelection(option.table_id)
+                            }
+                        }}>
+                        <Checkbox checked={checked} onClick={event => event.stopPropagation()}
+                            onChange={event => toggleTableSelection(option.table_id, event.target.checked)}/>
+                        <div className="phase2-table-option-meta">
+                            <b title={documentName}>{documentName}</b>
+                            <span title={chapter}>{chapter}</span>
+                            <span className="phase2-table-option-title" title={option.title}>{option.title}</span>
+                        </div>
+                        <Button icon={<EyeOutlined/>} onClick={event => {
+                            event.stopPropagation();
+                            setTablePreviewId(option.table_id)
+                        }}>预览</Button>
+                    </div>
+                }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的引用表格"/>}</div>}
+        </Modal>
+        <Drawer className="phase2-table-preview-drawer" placement="right" width="min(900px, 94vw)"
+            title={previewTable ? <div className="phase2-table-preview-title">
+                <b>{tableDocumentName(previewTable.document_name)}</b>
+                <span>{previewTable.section_number || previewTable.section_title} · {previewTable.title}</span>
+            </div> : "表格预览"}
+            open={Boolean(previewTable)} onClose={() => setTablePreviewId(undefined)}>
+            {previewTable ? <div className="phase2-table-preview-scroll">
+                <div className="phase2-source-table-preview" dangerouslySetInnerHTML={{__html: previewTable.table_html}}/>
+            </div> : null}
+        </Drawer>
+        {rebuilding && <Modal open closable={false} footer={null} title="正在确定性重建测试需求">
+            <Progress percent={editRun.data?.progress || 0}/><p>{editRun.data?.currentStage || "排队中"}</p>
+        </Modal>}
+        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="重建失败，已恢复原版本" description={editRun.data.errorMessage}/>}
+        {saveInlineEdit.error && <Alert type="error" showIcon message="提交失败" description={saveInlineEdit.error.message}/>}
         <Drawer className="review-center-drawer" width={520} title="评审中心" open={reviewCenterOpen}
                 onClose={() => setReviewCenterOpen(false)}
                 footer={<Button block type={pendingCount ? "default" : "primary"} icon={<ExportOutlined/>}

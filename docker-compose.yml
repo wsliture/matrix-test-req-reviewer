@@ -39,12 +39,15 @@ services:
     volumes:
       - projects:/data/projects
       - opencode-config:/opencode-config
+    environment:
+      MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
   worker:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: worker }
     env_file: ${ENV_FILE:-.env}
     depends_on: [ postgres, redis, minio, opencode ]
     environment:
       OPENCODE_CONFIG_PATH: /opencode-config/opencode.json
+      MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
     volumes:
       - projects:/data/projects
       - opencode-config:/opencode-config:ro

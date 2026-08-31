@@ -13,6 +13,7 @@ if [ ! -s "$CONFIG_FILE" ]; then
 fi
 
 child_pid=""
+runner_pid=""
 last_request="$(cat "$RESTART_FILE" 2>/dev/null || true)"
 
 start_server() {
@@ -28,7 +29,20 @@ stop_server() {
   fi
 }
 
-trap 'stop_server; exit 0' INT TERM
+start_runner() {
+  bun /plugin/dist/direct-phase2-runner.js &
+  runner_pid=$!
+}
+
+stop_runner() {
+  if [ -n "$runner_pid" ] && kill -0 "$runner_pid" 2>/dev/null; then
+    kill -TERM "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+  fi
+}
+
+trap 'stop_server; stop_runner; exit 0' INT TERM
+start_runner
 start_server "$@"
 
 while true; do

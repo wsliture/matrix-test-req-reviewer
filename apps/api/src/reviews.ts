@@ -1,4 +1,4 @@
-import {BadRequestException, Body, Controller, Get, Param, Post, Req} from "@nestjs/common";
+import {BadRequestException, Body, ConflictException, Controller, Get, Param, Post, Req} from "@nestjs/common";
 import {PrismaService} from "./prisma.js";
 
 export type ReviewScores = { correctness: number; coverage: number; testability: number };
@@ -31,6 +31,8 @@ export class ReviewsController {
         issues?: string[];
         comment?: string
     }) {
+        const project = await this.db.project.findUniqueOrThrow({where: {id: projectId}, select: {status: true}});
+        if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能评审");
         if (!body.nodeId?.trim()) throw new BadRequestException("评估节点不能为空");
         validateReview(body.scores, body.comment);
         const reviewerId = req.user.id,

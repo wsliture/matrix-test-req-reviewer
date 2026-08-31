@@ -68,6 +68,7 @@ services:
       REDIS_URL: redis://redis:6379
       MINIO_ENDPOINT: http://minio:9000
       OPENCODE_URL: http://opencode:4096
+      MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
       PROJECTS_ROOT: /data/projects
       WEB_ORIGIN: ${WEB_ORIGIN:?请在.env中设置WEB_ORIGIN}
     depends_on:
@@ -95,6 +96,7 @@ services:
       OPENCODE_URL: http://opencode:4096
       PROJECTS_ROOT: /data/projects
       OPENCODE_CONFIG_PATH: /opencode-config/opencode.json
+      MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
     depends_on:
       postgres:
         condition: service_healthy

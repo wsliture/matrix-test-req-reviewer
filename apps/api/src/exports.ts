@@ -201,6 +201,7 @@ export class ExportsController {
     @Get(":id/test-requirements-docx") async testRequirements(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id),
             reportDirectory = path.resolve(project.workspacePath, ".matrix", "reports");
+        if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能下载");
         const candidates = ["phase2-test-requirements.docx", "phase2-test-requirement.docx"];
         for (const filename of candidates) {
             const candidate = path.resolve(reportDirectory, filename);
@@ -218,6 +219,7 @@ export class ExportsController {
 
     @Get(":id/review-report") async reviewReport(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id);
+        if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能导出评审报告");
         const [requirements, reviews] = await Promise.all([
             this.db.testRequirementNode.findMany({where: {projectId: id}, orderBy: {orderIndex: "asc"}}),
             this.db.review.findMany({where: {projectId: id}, orderBy: [{version: "desc"}, {createdAt: "desc"}]})

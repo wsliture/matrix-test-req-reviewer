@@ -467,6 +467,37 @@ html, body, #root {
     text-indent: 2em;
     white-space: pre-wrap
 }
+.phase2-inline-editor {
+  display: inline-block;
+  width: 5em;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  margin: 0 3px;
+  padding: 0 3px;
+  border: 1px dashed #91caff;
+  border-radius: 4px;
+  background: rgba(230, 244, 255, .58);
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  vertical-align: text-bottom;
+  white-space: pre-wrap;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  resize: none;
+  box-sizing: border-box;
+}
+.phase2-inline-editor:hover { border-color: #4096ff; background: rgba(230, 244, 255, .82); }
+.phase2-inline-editor:focus { outline: none; border-color: #1677ff; border-style: solid; background: #f0f7ff; box-shadow: 0 0 0 2px rgba(22, 119, 255, .1); }
+.phase2-editable-source { cursor: pointer; outline: 1px dashed #1677ff; }
+.phase2-table td .phase2-inline-editor,
+.phase2-inline-editor-table-cell { width: 100%; min-width: 0; margin: 0; vertical-align: top; }
+.header .phase2-save-button.ant-btn-primary:disabled {
+    color: rgba(255, 255, 255, .62);
+    border-color: rgba(255, 255, 255, .3);
+    background: rgba(255, 255, 255, .08);
+}
 
 .phase2-list {
     margin: 0
@@ -519,6 +550,231 @@ html, body, #root {
 
 .phase2-table td:first-child {
     text-align: center
+}
+
+.phase2-table th { position: relative; }
+.phase2-table td { position: relative; }
+.phase2-table-structure-action.ant-btn {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    opacity: .25;
+}
+.phase2-table th:hover .phase2-table-structure-action.ant-btn { opacity: 1; }
+.phase2-table-row-delete.ant-btn {
+    position: absolute;
+    right: 1px;
+    top: 1px;
+    opacity: .18;
+}
+.phase2-table tr:hover .phase2-table-row-delete.ant-btn { opacity: 1; }
+.phase2-table-pending-delete {
+    opacity: .42;
+    background: #fff1f0 !important;
+    text-decoration: line-through;
+}
+.phase2-table td.phase2-table-pending-delete {
+    background: #fff1f0 !important;
+}
+.phase2-table-pending-add td,
+.phase2-table-pending-add th {
+    background: #f6ffed !important;
+}
+.phase2-requirement-pending-delete {
+    opacity: .42;
+    background: #fff1f0 !important;
+    text-decoration: line-through;
+}
+.phase2-table tr.phase2-requirement-pending-delete td {
+    background: #fff1f0 !important;
+}
+.phase2-requirement-pending-delete .ant-btn,
+.phase2-table tr.phase2-requirement-pending-delete .ant-btn {
+    opacity: 1;
+    text-decoration: none;
+}
+.phase2-requirement-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0;
+}
+.phase2-new-requirement-form {
+    display: grid;
+    gap: 12px;
+    padding-top: 8px;
+}
+.phase2-pending-requirement {
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    border: 1px dashed #95de64;
+    border-radius: 6px;
+    background: #f6ffed;
+    font-family: "SimSun", "宋体", serif;
+    white-space: pre-wrap;
+}
+.phase2-pending-requirement-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+.phase2-pending-requirement-title .ant-btn:first-of-type {
+    margin-left: auto;
+}
+.phase2-pending-requirement-related {
+    margin-top: 6px;
+    color: #595959;
+}
+.phase2-pending-requirement-sources {
+    margin-top: 8px;
+}
+.phase2-table-add-column { min-width: 92px; }
+.phase2-table-row-actions,
+.phase2-table-selector {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 14px;
+}
+.phase2-table-selector {
+    padding: 8px 10px;
+    border: 1px dashed #91caff;
+    border-radius: 6px;
+    background: #f6fbff;
+    font-family: "SimSun", "宋体", serif;
+}
+.phase2-table-selector-summary {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.phase2-table-selector-role {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #e6f4ff;
+    color: #0958d9;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.phase2-table-selector-description { flex: 1 1 260px; }
+.phase2-table-selector-count { color: #666; white-space: nowrap; }
+.phase2-table-selector-input { border-left: 4px solid #52c41a; }
+.phase2-table-selector-output { border-left: 4px solid #fa8c16; }
+.phase2-table-selector-overview { border-left: 4px solid #1677ff; }
+.phase2-source-table-preview {
+    margin-top: 14px;
+    padding: 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    overflow: auto;
+}
+.phase2-source-table-preview table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.phase2-source-table-preview th,
+.phase2-source-table-preview td { border: 1px solid #999; padding: 5px 7px; }
+
+.phase2-picker-selected {
+    padding: 12px 14px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #fafcff;
+}
+.phase2-picker-section-title {
+    margin-bottom: 9px;
+    color: #475569;
+    font-weight: 600;
+}
+.phase2-picker-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+.phase2-picker-tags .ant-tag {
+    max-width: 100%;
+    margin: 0;
+    padding: 4px 9px;
+    white-space: normal;
+    border-radius: 7px;
+    background: #eaf4ff;
+    border-color: #bae0ff;
+}
+.phase2-picker-empty-inline { color: #94a3b8; }
+.phase2-picker-search { margin: 14px 0 12px; }
+.phase2-picker-results {
+    max-height: 58vh;
+    overflow: auto;
+    padding: 3px;
+}
+.phase2-source-picker-results {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.phase2-source-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+}
+.phase2-source-option:hover { border-color: #91caff; background: #f6fbff; }
+.phase2-source-option.is-selected { border-color: #69b1ff; background: #eaf4ff; }
+.phase2-source-option > span:last-child,
+.phase2-table-option-header > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+.phase2-source-option small,
+.phase2-table-option-header small { margin-top: 3px; color: #64748b; }
+.phase2-table-picker-results { display: flex; flex-direction: column; gap: 8px; }
+.phase2-table-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    padding: 9px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    background: #fff;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.phase2-table-option:hover { border-color: #91caff; background: #f6fbff; }
+.phase2-table-option:focus-visible { outline: 2px solid #1677ff; outline-offset: 1px; }
+.phase2-table-option.is-selected { border-color: #69b1ff; background: #eaf4ff; box-shadow: 0 0 0 2px rgba(22,119,255,.08); }
+.phase2-table-option-meta {
+    display: grid;
+    grid-template-columns: minmax(140px, .8fr) minmax(100px, .55fr) minmax(220px, 1.5fr);
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    flex: 1;
+}
+.phase2-table-option-meta > * {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.phase2-table-option-meta > span { color: #64748b; }
+.phase2-table-option-meta .phase2-table-option-title { color: #1f2937; }
+.phase2-table-preview-title { display: flex; flex-direction: column; min-width: 0; }
+.phase2-table-preview-title b,
+.phase2-table-preview-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phase2-table-preview-title span { margin-top: 3px; color: #64748b; font-size: 13px; font-weight: 400; }
+.phase2-table-preview-drawer .ant-drawer-body { padding: 16px; overflow: hidden; }
+.phase2-table-preview-scroll { width: 100%; height: 100%; overflow: auto; }
+.phase2-table-preview-scroll .phase2-source-table-preview { min-width: max-content; margin: 0; }
+.phase2-table-preview-scroll .phase2-source-table-preview table { width: max-content; min-width: 100%; }
+.phase2-picker-search-hint { margin: 26px 0 18px; }
+@media (max-width: 760px) {
+    .phase2-source-picker-results { grid-template-columns: 1fr; }
+    .phase2-table-option-meta { grid-template-columns: 1fr; gap: 2px; }
+    .phase2-table-option { align-items: flex-start; }
 }
 
 .phase2-heading-line > .evaluation-trigger.ant-btn {

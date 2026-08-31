@@ -78,6 +78,11 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         await writeFile(path.join(dataDir, "chapter2-system-overview.json"), JSON.stringify({
             processor_type: "BM3803",
             processor_frequency: "48MHz",
+            memory_io_tables: [{
+                title: "P1端口定义",
+                columns: ["序号", "IO口", "用途", "备注"],
+                rows: [["1", "GPIO3", "基带复位", "输出"]]
+            }],
             interrupts: [{
                 interrupt_name: "遥控PCM采集中断",
                 priority: "最高",
@@ -88,18 +93,64 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
                 purpose: "不应显示"
             }]
         }));
-        const document = await buildPhase2Document(workspace, []);
+        const document = await buildPhase2Document(workspace, [{id: "chapter2", businessId: "chapter2", artifact: "chapter2-system-overview.json", parentId: null}]);
         const chapter = document.chapters.find(item => item.number === "2");
         const processor = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.startsWith("b. "));
+        const memory = chapter?.blocks.find(block => block.type === "table" && block.caption?.includes("P1端口定义"));
         const interrupt = chapter?.blocks.find(block => block.type === "table" && block.caption?.includes("中断使用说明"));
         expect(processor?.text).toBe("b. CPU：BM3803，主频：48MHz");
+        expect(memory?.cellBindings?.[0].map(item => item?.kind)).toEqual([
+            "table_cell", "table_cell", "table_cell", "table_cell"
+        ]);
+        expect(memory?.captionParts?.some(part => part.editable)).toBe(true);
+        expect(memory?.headerBindings?.every(item => item?.kind === "table_header")).toBe(true);
         expect(interrupt?.columns).toEqual(["中断名称", "优先级", "周期（触发频率）/随机（频繁/偶发）", "触发方式", "执行功能"]);
         expect(interrupt?.rows).toEqual([["遥控PCM采集中断", "最高", "随机（频繁）", "IO中断", "采集PCM码流数据"]]);
         expect(JSON.stringify(interrupt)).not.toContain("不应显示")
+        expect(interrupt?.cellBindings?.[0].map(item => item?.kind)).toEqual([
+            "table_cell", "table_cell", "table_cell", "table_cell", "table_cell"
+        ])
+    });
+
+    it("exposes only raw-backed values as editable text parts", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-inline-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        await writeFile(path.join(dataDir, "chapter1-scope.json"), JSON.stringify({document_id: "CASC-SRS", document_version: "1.00"}));
+        const requirements = [{id: "chapter1", businessId: "chapter1", artifact: "chapter1-scope.json", parentId: null}];
+        const document = await buildPhase2Document(workspace, requirements);
+        const identity = document.chapters[0].blocks.find(block => block.text?.startsWith("a. 文档标识"));
+        expect(identity?.parts?.filter(part => part.editable).map(part => part.text)).toEqual(["CASC-SRS", "1.00"]);
+        expect(identity?.parts?.filter(part => !part.editable).map(part => part.text).join("")).toContain("文档标识：.RX1，版本号：");
     })
 });
 
 describe("hardware interface anchors", () => {
+    it("binds scalar hardware input and output flows to the whole raw field", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-hardware-flow-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        await writeFile(path.join(dataDir, "hardware-interface-model.json"), JSON.stringify({
+            chapter_title: "数据及接口需求", section_title: "硬件接口",
+            interfaces: [{candidate_id: "C-1", interface_id: "IF-1", title: "CAN", overview: "接口说明", source_refs: ["primary::SRS-3.1"], input_flow: "间接指令", output_flow: "应答", overview_tables: [], input_tables: [], output_tables: [], topics: []}]
+        }));
+        const requirements = [
+            {id: "hardware-root", businessId: "hardware-root", artifact: "hardware-interface-model.json", number: "3.1", parentId: null},
+            {id: "hardware-interface", businessId: "hardware-interface", artifact: "hardware-interface-model.json", number: "3.1.1", parentId: "hardware-root"}
+        ];
+        const document = await buildPhase2Document(workspace, requirements);
+        const editable = document.chapters.flatMap(chapter => chapter.blocks)
+            .flatMap(block => block.parts || []).filter(part => part.editable).map(part => part.editable ? part.binding : undefined);
+        const fields = editable.map(item => item ? JSON.parse(Buffer.from(item.edit_key, "base64url").toString("utf8")).field : undefined);
+        expect(fields).toContain("input_flow");
+        expect(fields).toContain("output_flow");
+        expect(fields).not.toContain("input_flow.0");
+        expect(fields).not.toContain("output_flow.0");
+        const hardware = document.chapters.find(chapter => chapter.number === "3.1");
+        expect(hardware?.blocks.filter(block => block.type === "table_selector").map(block => block.selectionRole)).toEqual(["概述", "输入流", "输出流"]);
+        expect(hardware?.blocks.find(block => block.type === "paragraph" && block.parts?.some(part => part.text === "接口说明"))?.anchorId).toBeUndefined()
+    });
+
     it("binds fourth-level topic headings to their indexed node", async () => {
         const workspace = await mkdtemp(path.join(tmpdir(), "phase2-document-"));
         const dataDir = path.join(workspace, ".matrix", "data");

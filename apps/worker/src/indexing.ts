@@ -3,7 +3,8 @@ import {XMLParser} from "fast-xml-parser";
 import {createHash} from "node:crypto";
 import {readdir, readFile, rm} from "node:fs/promises";
 import path from "node:path";
-import type {Pool} from "pg";
+import type {Pool, PoolClient} from "pg";
+type Db = Pick<Pool | PoolClient, "query">;
 
 type Json = Record<string, any>;
 type TocEntry = {
@@ -27,6 +28,12 @@ type RequirementDraft = {
     content: Json;
     sourceRefs: string[]
 };
+type PreviousRequirementNode = {id: string; businessId: string; reviewCount: number | string};
+export type ReviewNodeMigrationPlan = {
+    updates: Array<{businessId: string; nextBusinessId: string; previousId: string; nextId: string}>;
+    unmatched: PreviousRequirementNode[];
+};
+export type RequirementIdRename = {from: string; to: string};
 
 const ARTIFACTS = [
     ["chapter1-scope.json", "1", "范围"], ["chapter2-system-overview.json", "2", "系统概述"],
@@ -50,6 +57,8 @@ const parser = new XMLParser({
 });
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const stableId = (prefix: string, value: string) => `${prefix}-${hash(value).slice(0, 24)}`;
+export const projectScopedStableId = (prefix: string, projectId: string, value: string) =>
+    stableId(prefix, `${projectId}:${value}`);
 const asArray = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
 const canonicalSegmentId = (value: string) => value.replace(/__\d+$/, "");
 
@@ -119,7 +128,7 @@ function sourceDescriptors(workspace: string, artifacts?: Json) {
     }))
 }
 
-async function indexDocuments(db: Pool, projectId: string, workspace: string) {
+async function indexDocuments(db: Db, projectId: string, workspace: string) {
     const dataDir = path.join(workspace, ".matrix", "data"),
         artifacts = await readJson(path.join(dataDir, "source-artifacts.json"));
     const descriptors = sourceDescriptors(workspace, artifacts), files = await docxFiles(workspace),
@@ -174,9 +183,9 @@ function findTitle(value: Json) {
     return value.title || value.section_title || value.chapter_title || value.name
 }
 
-function collectRequirements(value: any, artifact: string, drafts: RequirementDraft[], parentId?: string, parentLevel = 0) {
+function collectRequirements(projectId: string, value: any, artifact: string, drafts: RequirementDraft[], parentId?: string, parentLevel = 0) {
     if (!value || typeof value !== "object") return;
-    if (Array.isArray(value)) return value.forEach(item => collectRequirements(item, artifact, drafts, parentId, parentLevel));
+    if (Array.isArray(value)) return value.forEach(item => collectRequirements(projectId, item, artifact, drafts, parentId, parentLevel));
     const requirementId = typeof value.requirement_id === "string" ? value.requirement_id : undefined,
         number = findNumber(value), rawTitle = findTitle(value),
         title = requirementId ? String(value.content || rawTitle || requirementId).slice(0, 100) : rawTitle,
@@ -187,7 +196,7 @@ function collectRequirements(value: any, artifact: string, drafts: RequirementDr
             existing = drafts.find(item => item.businessId === businessId);
         if (!existing) {
             level = requirementId ? parentLevel + 1 : typeof number === "string" ? number.split(".").length : parentLevel + 1;
-            const id = stableId("trn", businessId);
+            const id = projectScopedStableId("trn", projectId, businessId);
             drafts.push({
                 id,
                 businessId,
@@ -209,17 +218,17 @@ function collectRequirements(value: any, artifact: string, drafts: RequirementDr
     }
     for (const [key, child] of Object.entries(value)) {
         if (["source_ref", "source_refs", "content", "summary", "input_flow", "output_flow", "rows", "columns"].includes(key)) continue;
-        collectRequirements(child, artifact, drafts, currentParent, level)
+        collectRequirements(projectId, child, artifact, drafts, currentParent, level)
     }
 }
 
-function collectHardwareRequirements(data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
+function collectHardwareRequirements(projectId: string, data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
     for (const [interfaceIndex, item] of asArray(data.interfaces).entries()) {
         if (!item || typeof item !== "object") continue;
         const number = `3.1.${interfaceIndex + 1}`;
         const title = String(item.title || item.interface_name || item.name || `硬件接口${interfaceIndex + 1}`);
         const businessId = `${artifact}:${number}:${title}`;
-        const id = stableId("trn", businessId);
+        const id = projectScopedStableId("trn", projectId, businessId);
         drafts.push({
             id,
             businessId,
@@ -239,7 +248,7 @@ function collectHardwareRequirements(data: Json, artifact: string, drafts: Requi
             const topicTitle = String(topic.title || topic.name || `接口数据流${topicIndex + 1}`);
             const topicBusinessId = `${artifact}:${topicNumber}:${topicTitle}`;
             drafts.push({
-                id: stableId("trn", topicBusinessId),
+                id: projectScopedStableId("trn", projectId, topicBusinessId),
                 businessId: topicBusinessId,
                 nodeType: "section",
                 number: topicNumber,
@@ -255,7 +264,7 @@ function collectHardwareRequirements(data: Json, artifact: string, drafts: Requi
     }
 }
 
-function collectNonFunctionalRequirements(data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
+function collectNonFunctionalRequirements(projectId: string, data: Json, artifact: string, drafts: RequirementDraft[], rootId: string) {
     const sectionNumber = String(data.section_title_no || ""),
         section = drafts.find(item => item.artifact === artifact && item.number === sectionNumber),
         parentId = section?.id || rootId,
@@ -266,19 +275,44 @@ function collectNonFunctionalRequirements(data: Json, artifact: string, drafts: 
         if (!requirementId || drafts.some(item => item.businessId === requirementId)) continue;
         const description = Object.entries(row).find(([key, value]) => key.endsWith("_requirement_description") && typeof value === "string")?.[1];
         drafts.push({
-            id: stableId("trn", requirementId), businessId: requirementId, nodeType: "requirement",
+            id: projectScopedStableId("trn", projectId, requirementId), businessId: requirementId, nodeType: "requirement",
             number: requirementId, title: String(description || row.related_description || requirementId), level,
             parentId, order: drafts.length, artifact, content: row, sourceRefs: sourceRefsOf(row)
         })
     }
 }
 
-async function indexRequirements(db: Pool, projectId: string, workspace: string) {
+function validateRequirementDrafts(projectId: string, drafts: RequirementDraft[]) {
+    const ids = new Map<string, RequirementDraft>(), businessIds = new Map<string, RequirementDraft>();
+    for (const item of drafts) {
+        const duplicateId = ids.get(item.id);
+        if (duplicateId) throw new Error(`项目 ${projectId} 的测试需求索引草稿存在重复主键 ${item.id}：${duplicateId.artifact}/${duplicateId.businessId} 与 ${item.artifact}/${item.businessId}`);
+        ids.set(item.id, item);
+        const duplicateBusinessId = businessIds.get(item.businessId);
+        if (duplicateBusinessId) throw new Error(`项目 ${projectId} 的测试需求索引草稿存在重复 businessId ${item.businessId}：${duplicateBusinessId.artifact} 与 ${item.artifact}`);
+        businessIds.set(item.businessId, item)
+    }
+}
+
+export function planReviewNodeMigrations(previousNodes: PreviousRequirementNode[], nextNodes: Array<{id: string; businessId: string}>, renames: RequirementIdRename[] = []): ReviewNodeMigrationPlan {
+    const nextIdByBusinessId = new Map(nextNodes.map(item => [item.businessId, item.id]));
+    const renamedBusinessIds = new Map(renames.map(item => [item.from, item.to]));
+    const updates: ReviewNodeMigrationPlan["updates"] = [], unmatched: PreviousRequirementNode[] = [];
+    for (const previous of previousNodes) {
+        const nextBusinessId = renamedBusinessIds.get(previous.businessId) || previous.businessId;
+        const nextId = nextIdByBusinessId.get(nextBusinessId);
+        if (nextId && nextId !== previous.id) updates.push({businessId: previous.businessId, nextBusinessId, previousId: previous.id, nextId});
+        else if (!nextId && Number(previous.reviewCount) > 0) unmatched.push(previous)
+    }
+    return {updates, unmatched}
+}
+
+async function indexRequirements(db: Db, projectId: string, workspace: string, renames: RequirementIdRename[] = []) {
     const dataDir = path.join(workspace, ".matrix", "data"), drafts: RequirementDraft[] = [];
     for (const [artifact, number, title] of ARTIFACTS) {
         const data = await readJson(path.join(dataDir, artifact));
         if (!data) continue;
-        const rootId = stableId("trn", `${artifact}:${number}:${title}`);
+        const rootId = projectScopedStableId("trn", projectId, `${artifact}:${number}:${title}`);
         drafts.push({
             id: rootId,
             businessId: `${artifact}:${number}:${title}`,
@@ -291,14 +325,27 @@ async function indexRequirements(db: Pool, projectId: string, workspace: string)
             content: data,
             sourceRefs: sourceRefsOf(data)
         });
-        if (artifact === "hardware-interface-model.json") collectHardwareRequirements(data, artifact, drafts, rootId);
+        if (artifact === "hardware-interface-model.json") collectHardwareRequirements(projectId, data, artifact, drafts, rootId);
         else {
-            collectRequirements(data, artifact, drafts, rootId, number.split(".").length);
-            if (NON_FUNCTIONAL_ARTIFACTS.has(artifact)) collectNonFunctionalRequirements(data, artifact, drafts, rootId)
+            collectRequirements(projectId, data, artifact, drafts, rootId, number.split(".").length);
+            if (NON_FUNCTIONAL_ARTIFACTS.has(artifact)) collectNonFunctionalRequirements(projectId, data, artifact, drafts, rootId)
         }
     }
+    validateRequirementDrafts(projectId, drafts);
+    const previousNodes = await db.query(`select n.id,n."businessId",count(r.id)::int as "reviewCount"
+        from "TestRequirementNode" n left join "Review" r on r."projectId"=n."projectId" and r."nodeId"=n.id
+        where n."projectId"=$1 group by n.id,n."businessId"`, [projectId]);
+    const migrationPlan = planReviewNodeMigrations(previousNodes.rows, drafts, renames);
     await db.query('delete from "TestRequirementNode" where "projectId"=$1', [projectId]);
-    for (const item of drafts) await db.query('insert into "TestRequirementNode" (id,"projectId","businessId","nodeType",number,title,level,"parentId","orderIndex",artifact,content,"sourceRefs") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [item.id, projectId, item.businessId, item.nodeType, item.number, item.title, item.level, item.parentId || null, item.order, item.artifact, JSON.stringify(item.content), JSON.stringify(item.sourceRefs)]);
+    for (const item of drafts) {
+        try {
+            await db.query('insert into "TestRequirementNode" (id,"projectId","businessId","nodeType",number,title,level,"parentId","orderIndex",artifact,content,"sourceRefs") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [item.id, projectId, item.businessId, item.nodeType, item.number, item.title, item.level, item.parentId || null, item.order, item.artifact, JSON.stringify(item.content), JSON.stringify(item.sourceRefs)])
+        } catch (error) {
+            throw new Error(`写入项目 ${projectId} 的测试需求节点失败：artifact=${item.artifact}, businessId=${item.businessId}, id=${item.id}`, {cause: error})
+        }
+    }
+    for (const migration of migrationPlan.updates) await db.query('update "Review" set "nodeId"=$1 where "projectId"=$2 and "nodeId"=$3', [migration.nextId, projectId, migration.previousId]);
+    for (const previous of migrationPlan.unmatched) console.warn(`项目 ${projectId} 的历史评审未迁移：businessId=${previous.businessId}, nodeId=${previous.id}, reviewCount=${previous.reviewCount}`);
     await db.query('delete from "TraceLink" where "projectId"=$1', [projectId]);
     const sourceRows = await db.query('select d.id,d."sourceRef" from "DocumentNode" d join "Document" doc on doc.id=d."documentId" where doc."projectId"=$1', [projectId]),
         sourceMap = new Map(sourceRows.rows.map(row => [row.sourceRef, row.id])),
@@ -309,15 +356,25 @@ async function indexRequirements(db: Pool, projectId: string, workspace: string)
             key = `${sourceId}:${targetId}`;
         if (!sourceId || !targetId || links.has(key)) return;
         links.add(key);
-        await db.query('insert into "TraceLink" (id,"projectId","sourceNodeId","targetNodeId",source) values ($1,$2,$3,$4,$5)', [stableId("tl", key), projectId, sourceId, targetId, source])
+        await db.query('insert into "TraceLink" (id,"projectId","sourceNodeId","targetNodeId",source) values ($1,$2,$3,$4,$5)', [projectScopedStableId("tl", projectId, key), projectId, sourceId, targetId, source])
     };
     const trace = await readJson(path.join(dataDir, "phase2-test-traceability.json"));
     for (const row of trace?.rows || []) for (const requirementId of row.test_requirement_ids || []) await add(row.source_ref, requirementId, "phase2-test-traceability.json");
     for (const item of drafts) for (const sourceRef of item.sourceRefs) await add(sourceRef, item.businessId, item.artifact)
 }
 
-export async function indexProject(db: Pool, projectId: string, workspace: string) {
+export async function indexProject(db: Pool, projectId: string, workspace: string, renames: RequirementIdRename[] = []) {
     await rm(path.join(path.dirname(workspace), "preview"), {recursive: true, force: true});
-    await indexDocuments(db, projectId, workspace);
-    await indexRequirements(db, projectId, workspace)
+    const client = await db.connect();
+    try {
+        await client.query("begin");
+        const projectLock = await client.query('select id from "Project" where id=$1 for update', [projectId]);
+        if (!projectLock.rowCount) throw new Error(`无法索引不存在的项目：${projectId}`);
+        await indexDocuments(client, projectId, workspace);
+        await indexRequirements(client, projectId, workspace, renames);
+        await client.query("commit")
+    } catch (error) {
+        await client.query("rollback");
+        throw error
+    } finally { client.release() }
 }
