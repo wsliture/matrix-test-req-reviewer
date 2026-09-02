@@ -255,6 +255,9 @@ export type ReviewRecord = {
     comment?: string;
     createdAt: string
 };
+export type EditTimeSegmentInput = {id: string; startedAt: string; durationMs: number};
+export type EditTimeSummary = {myDurationMs: number; projectDurationMs: number;
+    users: {userId: string; username: string; durationMs: number}[]};
 export type MissingReview = { id: string; number: string; title: string };
 
 export type RunEvent = { id: string; type: string; payload: Record<string, unknown>; createdAt: string };

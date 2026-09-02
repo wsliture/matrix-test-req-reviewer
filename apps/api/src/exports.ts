@@ -22,6 +22,7 @@ type Requirement = {
     artifact: string;
 };
 type Review = { nodeId: string; scores: unknown; weightedScore: number; comment: string | null };
+type EditTimeSegment = {userId: string; durationMs: number; user?: {username: string} | null};
 export type MissingReview = { id: string; number: string; title: string };
 type ReportRow = {
     seq: string;
@@ -64,6 +65,26 @@ function parseScores(value: unknown): ReviewScores {
 
 function score(value: number) {
     return Number(value.toFixed(2)).toString()
+}
+
+export function formatEditDuration(durationMs: number) {
+    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600), minutes = Math.floor(totalSeconds % 3600 / 60), seconds = totalSeconds % 60;
+    return [hours, minutes, seconds].map(value => String(value).padStart(2, "0")).join(":")
+}
+
+export function buildEditTimeReportData(editTimeSegments: EditTimeSegment[]) {
+    const editTimeByUser = new Map<string, {username: string; durationMs: number}>();
+    for (const segment of editTimeSegments) {
+        const current = editTimeByUser.get(segment.userId) || {username: segment.user?.username || "未知用户", durationMs: 0};
+        current.durationMs += segment.durationMs;
+        editTimeByUser.set(segment.userId, current)
+    }
+    return {
+        editTimeRows: [...editTimeByUser].map(([userId, value], index) => ({seq: String(index + 1), userId,
+            username: value.username, duration: formatEditDuration(value.durationMs)})),
+        projectEditDuration: formatEditDuration(editTimeSegments.reduce((sum, segment) => sum + segment.durationMs, 0))
+    }
 }
 
 function average(reviews: Review[], key: keyof ReviewScores) {
@@ -112,7 +133,7 @@ function rowFromReview(seq: number, name: string, review: Review, extra: {
     }
 }
 
-export async function buildReviewReportData(workspacePath: string, requirements: Requirement[], reviews: Review[]) {
+export async function buildReviewReportData(workspacePath: string, requirements: Requirement[], reviews: Review[], editTimeSegments: EditTimeSegment[] = []) {
     const document = await buildPhase2Document(workspacePath, requirements);
     const byId = new Map(requirements.map(item => [item.id, item]));
     const latest = new Map<string, Review>();
@@ -183,13 +204,15 @@ export async function buildReviewReportData(workspacePath: string, requirements:
             grade: ""
         }
     });
-    return {hardwareRows, functionalRows, nonFunctionalRows, statisticsRows}
+    return {hardwareRows, functionalRows, nonFunctionalRows, statisticsRows, ...buildEditTimeReportData(editTimeSegments)}
 }
 
-export async function renderReviewReport(data: Awaited<ReturnType<typeof buildReviewReportData>>) {
+type ReviewReportData = Awaited<ReturnType<typeof buildReviewReportData>>;
+export async function renderReviewReport(data: Omit<ReviewReportData, "editTimeRows" | "projectEditDuration"> &
+    Partial<Pick<ReviewReportData, "editTimeRows" | "projectEditDuration">>) {
     const template = await readFile(TEMPLATE_PATH);
     const document = new Docxtemplater(new PizZip(template), {paragraphLoop: true, linebreaks: true});
-    document.render(data);
+    document.render({...data, editTimeRows: data.editTimeRows || [], projectEditDuration: data.projectEditDuration || "00:00:00"});
     return document.getZip().generate({type: "nodebuffer", compression: "DEFLATE"}) as Buffer
 }
 
@@ -227,11 +250,12 @@ export class ExportsController {
     @Get(":id/review-report") async reviewReport(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id);
         if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能导出评审报告");
-        const [requirements, reviews] = await Promise.all([
+        const [requirements, reviews, editTimeSegments] = await Promise.all([
             this.db.testRequirementNode.findMany({where: {projectId: id}, orderBy: {orderIndex: "asc"}}),
-            this.db.review.findMany({where: {projectId: id}, orderBy: [{version: "desc"}, {createdAt: "desc"}]})
+            this.db.review.findMany({where: {projectId: id}, orderBy: [{version: "desc"}, {createdAt: "desc"}]}),
+            this.db.editTimeSegment.findMany({where: {projectId: id}, select: {userId: true, durationMs: true, user: {select: {username: true}}}})
         ]);
-        const data = await buildReviewReportData(project.workspacePath, requirements, reviews);
+        const data = await buildReviewReportData(project.workspacePath, requirements, reviews, editTimeSegments);
         const buffer = await renderReviewReport(data);
         const downloadName = `${cleanProjectName(project.name)}-测试需求生成结果评估报告.docx`;
         return reply.type(DOCX_TYPE).header("Content-Disposition", contentDisposition(downloadName)).send(buffer)

@@ -36,6 +36,7 @@ model User {
   refreshTokens RefreshToken[]
   reviews Review[]
   phase2EditRuns Phase2EditRun[]
+  editTimeSegments EditTimeSegment[]
   createdAt DateTime @default(now())
 }
 model RefreshToken {
@@ -59,6 +60,7 @@ model Project {
   runs Phase2Run[]
   editRuns Phase2EditRun[]
   reviews Review[]
+  editTimeSegments EditTimeSegment[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -195,6 +197,18 @@ model Review {
   reviewer User @relation(fields:[reviewerId], references:[id])
   createdAt DateTime @default(now())
   @@unique([projectId,nodeId,version])
+}
+model EditTimeSegment {
+  id String @id
+  projectId String
+  userId String
+  startedAt DateTime
+  durationMs Int
+  createdAt DateTime @default(now())
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  @@index([projectId,createdAt])
+  @@index([projectId,userId])
 }
 model AuditLog {
   id BigInt @id @default(autoincrement())

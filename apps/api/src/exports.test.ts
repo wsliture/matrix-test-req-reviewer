@@ -3,9 +3,20 @@ import {describe, expect, it} from "vitest";
 import {mkdir, mkdtemp, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
-import {buildReviewReportData, renderReviewReport} from "./exports.js";
+import {buildEditTimeReportData, buildReviewReportData, renderReviewReport} from "./exports.js";
 
 describe("review report export", () => {
+    it("aggregates edit time by user and defaults an empty project to zero", () => {
+        expect(buildEditTimeReportData([])).toEqual({editTimeRows: [], projectEditDuration: "00:00:00"});
+        expect(buildEditTimeReportData([
+            {userId: "u1", durationMs: 1000, user: {username: "甲"}},
+            {userId: "u2", durationMs: 3000, user: {username: "乙"}},
+            {userId: "u1", durationMs: 2000, user: {username: "甲"}}
+        ])).toEqual({editTimeRows: [
+            {seq: "1", userId: "u1", username: "甲", duration: "00:00:03"},
+            {seq: "2", userId: "u2", username: "乙", duration: "00:00:03"}
+        ], projectEditDuration: "00:00:06"})
+    });
     it("fills all dynamic tables without leaving template tags", async () => {
         const common = {correctness: "5", coverage: "4", testability: "3", weighted: "4.15", comment: "补充边界场景"};
         const buffer = await renderReviewReport({
@@ -20,13 +31,17 @@ describe("review report export", () => {
                 testability: "3",
                 weighted: "4.15",
                 grade: ""
-            }]
+            }],
+            editTimeRows: [{seq: "1", userId: "u1", username: "测试员甲", duration: "01:02:03"}],
+            projectEditDuration: "01:02:03"
         });
         expect(buffer.byteLength).toBeGreaterThan(10_000);
         const xml = new PizZip(buffer).file("word/document.xml")!.asText();
         expect(xml).toContain("初始化功能需求项");
         expect(xml).toContain("补充边界场景");
-        expect(xml).not.toMatch(/\{[#/]?(hardwareRows|functionalRows|nonFunctionalRows|statisticsRows)\}/)
+        expect(xml).toContain("测试员甲");
+        expect(xml).toContain("01:02:03");
+        expect(xml).not.toMatch(/\{[#/]?(hardwareRows|functionalRows|nonFunctionalRows|statisticsRows|editTimeRows)\}/)
     })
 
     it("blocks export and identifies every missing evaluable node", async () => {

@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {renderAsync} from "docx-preview";
 import {Alert, Button, Space, Spin, Tooltip} from "antd";
-import {MinusOutlined, PlusOutlined} from "@ant-design/icons";
+import {MinusOutlined, PlusOutlined, ZoomInOutlined} from "@ant-design/icons";
 import {authenticatedFetch, type DocumentNode} from "./api";
 
 const normalized = (value: string) => value.replace(/\s+/g, "").toLowerCase();
@@ -19,6 +19,7 @@ export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onN
     const naturalSize = useRef({width: 0, height: 0});
     const [loading, setLoading] = useState(false), [error, setError] = useState<string>();
     const [zoomMode, setZoomMode] = useState<ZoomMode>("fit"), [scale, setScale] = useState(1);
+    const [touchToolbarOpen, setTouchToolbarOpen] = useState(false);
     const applyScale = useCallback((nextScale: number) => {
         const preview = container.current, wrapper = preview?.querySelector<HTMLElement>(".docx-wrapper");
         if (!preview || !wrapper || !naturalSize.current.width) return;
@@ -101,20 +102,43 @@ export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onN
         target?.classList.add("source-highlight");
         target?.scrollIntoView({behavior: "smooth", block: "center"})
     }, [activeNodeId, loading, navigationKey]);
+    useEffect(() => {
+        if (!touchToolbarOpen) return;
+        const closeOnOutsidePointer = (event: PointerEvent) => {
+            if (!shell.current?.querySelector(".docx-zoom-dock")?.contains(event.target as Node)) {
+                setTouchToolbarOpen(false)
+            }
+        };
+        document.addEventListener("pointerdown", closeOnOutsidePointer);
+        return () => document.removeEventListener("pointerdown", closeOnOutsidePointer)
+    }, [touchToolbarOpen]);
     return <div ref={shell} className="docx-preview-shell">
-        {!error && <div className="docx-zoom-toolbar">
-            <Space.Compact>
-                <Button type={zoomMode === "fit" ? "primary" : "default"} onClick={() => {
-                    setZoomMode("fit");
-                    fitToWidth()
-                }}>适应宽度</Button>
-                <Button onClick={() => setManualScale(1)}>100%</Button>
-                <Tooltip title="缩小"><Button aria-label="缩小" icon={<MinusOutlined/>} disabled={scale <= MIN_SCALE}
-                                              onClick={() => setManualScale(scale - SCALE_STEP)}/></Tooltip>
-                <Button className="docx-zoom-value" disabled>{Math.round(scale * 100)}%</Button>
-                <Tooltip title="放大"><Button aria-label="放大" icon={<PlusOutlined/>} disabled={scale >= MAX_SCALE}
-                                              onClick={() => setManualScale(scale + SCALE_STEP)}/></Tooltip>
-            </Space.Compact>
+        {!error && <div className="docx-zoom-anchor">
+            <div className={`docx-zoom-dock${touchToolbarOpen ? " is-open" : ""}`}>
+                <Tooltip title="缩放文档" placement="left">
+                    <Button className="docx-zoom-trigger" shape="circle" icon={<ZoomInOutlined/>}
+                            aria-label="显示文档缩放控件"
+                            onClick={() => {
+                                if (window.matchMedia("(hover: none), (pointer: coarse)").matches) {
+                                    setTouchToolbarOpen(value => !value)
+                                }
+                            }}/>
+                </Tooltip>
+                <div className="docx-zoom-toolbar" aria-label="文档缩放控件">
+                    <Space.Compact>
+                        <Button type={zoomMode === "fit" ? "primary" : "default"} onClick={() => {
+                            setZoomMode("fit");
+                            fitToWidth()
+                        }}>适应宽度</Button>
+                        <Button onClick={() => setManualScale(1)}>100%</Button>
+                        <Tooltip title="缩小"><Button aria-label="缩小" icon={<MinusOutlined/>} disabled={scale <= MIN_SCALE}
+                                                      onClick={() => setManualScale(scale - SCALE_STEP)}/></Tooltip>
+                        <Button className="docx-zoom-value" disabled>{Math.round(scale * 100)}%</Button>
+                        <Tooltip title="放大"><Button aria-label="放大" icon={<PlusOutlined/>} disabled={scale >= MAX_SCALE}
+                                                      onClick={() => setManualScale(scale + SCALE_STEP)}/></Tooltip>
+                    </Space.Compact>
+                </div>
+            </div>
         </div>}
         {loading && <Spin tip="正在渲染DOCX"/>}
         {error && <Alert type="error" showIcon message="DOCX预览失败" description={error}/>}

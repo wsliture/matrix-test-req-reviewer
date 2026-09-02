@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
 import {
     Alert,
@@ -61,6 +61,7 @@ import {
     markAuthenticated,
     recoverSession,
     type CurrentUser,
+    type EditTimeSummary,
     type Phase2Run,
     type Phase2EditRun,
     type Phase2EditBinding,
@@ -77,6 +78,7 @@ import {
     subscribeSessionStatus,
     type TraceLink
 } from "./api";
+import {appendEditTimeOutbox, EditingTimeTracker, editTimeOutboxKey, formatEditDuration, readEditTimeOutbox, removeEditTimeOutbox} from "./editTime";
 import {DocxPreview} from "./DocxPreview";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
@@ -682,6 +684,66 @@ function Review() {
     const [requirementOperations, setRequirementOperations] = useState<Phase2RequirementOperation[]>([]);
     const [editRunId, setEditRunId] = useState<string>();
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
+    const currentUser = qc.getQueryData<CurrentUser>(["me"]);
+    const outboxKey = currentUser ? editTimeOutboxKey(id, currentUser.id) : "";
+    const [pendingEditDurationMs, setPendingEditDurationMs] = useState(0);
+    const [activeEditDurationMs, setActiveEditDurationMs] = useState(0);
+    const editTimeFlushPromise = useRef<Promise<void> | undefined>(undefined);
+    const editTimeTracker = useRef<EditingTimeTracker | undefined>(undefined);
+    const editTime = useQuery({queryKey: ["edit-time", id], queryFn: () => api<EditTimeSummary>(`/projects/${id}/edit-time`),
+        enabled: Boolean(id && currentUser)});
+    const refreshPendingDuration = useCallback(() => {
+        if (!outboxKey) return setPendingEditDurationMs(0);
+        setPendingEditDurationMs(readEditTimeOutbox(outboxKey).reduce((sum, segment) => sum + segment.durationMs, 0))
+    }, [outboxKey]);
+    const flushEditTime = useCallback(async (keepalive = false) => {
+        if (!outboxKey) return;
+        if (editTimeFlushPromise.current) return editTimeFlushPromise.current;
+        const run = (async () => {
+            while (true) {
+                const segments = readEditTimeOutbox(outboxKey).slice(0, 100);
+                if (!segments.length) return;
+                try {
+                    const summary = await api<EditTimeSummary>(`/projects/${id}/edit-time/segments`, {
+                        method: "POST", keepalive, body: JSON.stringify({segments})
+                    });
+                    removeEditTimeOutbox(outboxKey, segments.map(segment => segment.id));
+                    qc.setQueryData(["edit-time", id], summary);
+                    refreshPendingDuration()
+                } catch {
+                    refreshPendingDuration();
+                    return
+                }
+            }
+        })();
+        editTimeFlushPromise.current = run;
+        try { await run } finally { editTimeFlushPromise.current = undefined }
+    }, [id, outboxKey, qc, refreshPendingDuration]);
+    useEffect(() => {
+        if (!outboxKey) return;
+        refreshPendingDuration();
+        const tracker = new EditingTimeTracker(segment => {
+            appendEditTimeOutbox(outboxKey, segment);
+            refreshPendingDuration();
+            void flushEditTime()
+        });
+        editTimeTracker.current = tracker;
+        void flushEditTime();
+        const tick = window.setInterval(() => setActiveEditDurationMs(tracker.activeDurationMs()), 1000);
+        const stopAndFlush = () => { tracker.stop(); setActiveEditDurationMs(0); void flushEditTime(true) };
+        const onVisibility = () => { if (document.visibilityState === "hidden") stopAndFlush() };
+        document.addEventListener("visibilitychange", onVisibility);
+        window.addEventListener("pagehide", stopAndFlush);
+        return () => {
+            window.clearInterval(tick);
+            document.removeEventListener("visibilitychange", onVisibility);
+            window.removeEventListener("pagehide", stopAndFlush);
+            tracker.dispose();
+            editTimeTracker.current = undefined
+        }
+    }, [flushEditTime, outboxKey, refreshPendingDuration]);
+    const recordEditActivity = useCallback(() => editTimeTracker.current?.recordActivity(), []);
+    const stopEditActivity = useCallback(() => { editTimeTracker.current?.stop(); setActiveEditDurationMs(0) }, []);
     useEffect(() => {
         if (!documentEditing) return;
         const warnAboutUnsubmittedForm = (event: BeforeUnloadEvent) => {
@@ -702,11 +764,12 @@ function Review() {
     useEffect(() => {
         if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
         acknowledgedSavedRun.current = editRun.data.id;
+        stopEditActivity();
         setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]);
         setSourceEditBinding(undefined); setTableEditBinding(undefined);
         void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
         message.success("修改已保存，测试需求文档正在后台发布")
-    }, [editRun.data?.savedAt, editRun.data?.id, id, qc]);
+    }, [editRun.data?.savedAt, editRun.data?.id, id, qc, stopEditActivity]);
     useEffect(() => { if (editRun.data?.status === "SUCCEEDED") {
         void qc.invalidateQueries({queryKey: ["review-data", id]}); void qc.invalidateQueries({queryKey: ["reviews", id]})
     } }, [editRun.data?.status, id, qc]);
@@ -793,7 +856,11 @@ function Review() {
         onError: error => message.error(error.message)
     });
     const exportReport = useMutation({
-        mutationFn: () => downloadApi(`/projects/${id}/review-report`),
+        mutationFn: async () => {
+            stopEditActivity();
+            await flushEditTime();
+            return downloadApi(`/projects/${id}/review-report`)
+        },
         onSuccess: result => {
             saveDownload(result.blob, result.filename);
             message.success("评审报告导出完成")
@@ -945,11 +1012,13 @@ function Review() {
                                                        defaultExpandAll
                                                        onSelect={keys => gotoRequirement(String(keys[0] || ""))}/>
     </aside>;
-    const requirementDocument = <main className="document requirement-pane review-document-pane"><Phase2DocumentRenderer
+    const requirementDocument = <main className="document requirement-pane review-document-pane"
+        onChangeCapture={documentEditing ? recordEditActivity : undefined}
+        onBlurCapture={documentEditing ? stopEditActivity : undefined}><Phase2DocumentRenderer
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}
         activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation}
         reviewScores={reviewScores} editing={documentEditing} drafts={editorDrafts}
-        onDraft={(binding, value) => setEditorDrafts(current => ({...current, [binding.edit_key]: value}))}
+        onDraft={(binding, value) => { recordEditActivity(); setEditorDrafts(current => ({...current, [binding.edit_key]: value})) }}
         onEditSources={binding => {
             setSourceEditBinding(binding);
             setSourceModalValues([...((editorDrafts[binding.edit_key] ?? binding.value) as string[])]);
@@ -962,7 +1031,7 @@ function Review() {
         }} tableOperations={tableOperations} requirementOperations={requirementOperations}
         availableTables={inlineEditor.data?.available_tables || []}
         availableSourceRefs={inlineEditor.data?.available_source_refs || []}
-        onTableOperation={operation => setTableOperations(current => {
+        onTableOperation={operation => { recordEditActivity(); setTableOperations(current => {
             if (operation.draft_key) {
                 const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
                 if (duplicate >= 0) {
@@ -976,7 +1045,7 @@ function Review() {
                 if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
             }
             return [...current, operation]
-        })} onRequirementOperation={operation => setRequirementOperations(current => {
+        }) }} onRequirementOperation={operation => { recordEditActivity(); setRequirementOperations(current => {
             if (operation.draft_key) {
                 const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
                 if (duplicate >= 0) {
@@ -989,7 +1058,7 @@ function Review() {
                 if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
             }
             return [...current, operation]
-        })} readOnly={rebuilding}/></main>;
+        }) }} readOnly={rebuilding}/></main>;
     const persist = (name: string, setter: (sizes: SplitSizes) => void, threshold: number, bothSides: boolean) => (sizes: number[]) => {
         const next = snappedSizes(sizes, threshold, bothSides);
         setter(next);
@@ -1076,18 +1145,23 @@ function Review() {
         ? [option.document_name, option.section_number, option.section_title, option.title].join(" ").toLowerCase().includes(tableNeedle)
         : tableModalValues.includes(option.table_id)).slice(0, 30);
     const previewTable = tableOptionMap.get(tablePreviewId || "");
-    const toggleTableSelection = (tableId: string, checked?: boolean) => setTableModalValues(current => {
+    const toggleTableSelection = (tableId: string, checked?: boolean) => { recordEditActivity(); setTableModalValues(current => {
         const shouldSelect = checked ?? !current.includes(tableId);
         return shouldSelect ? [...new Set([...current, tableId])] : current.filter(item => item !== tableId)
-    });
+    }) };
+    const displayedMyEditDuration = (editTime.data?.myDurationMs || 0) + pendingEditDurationMs + activeEditDurationMs;
+    const displayedProjectEditDuration = (editTime.data?.projectDurationMs || 0) + pendingEditDurationMs + activeEditDurationMs;
     const exportActions = <Space>
+        <span className="edit-time-summary" title="输入、选择和结构编辑的累计人工用时">
+            我的编辑用时：{formatEditDuration(displayedMyEditDuration)} · 项目总编辑用时：{formatEditDuration(displayedProjectEditDuration)}
+        </span>
         {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={rebuilding || inlineEditor.isLoading}
             loading={inlineEditor.isLoading}
             onClick={() => { setEditorDrafts({}); setDocumentEditing(true) }}>编辑文档</Button> : <>
-            <Button ghost disabled={rebuilding} onClick={() => { setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined) }}>放弃修改</Button>
+            <Button ghost disabled={rebuilding} onClick={() => { stopEditActivity(); setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined) }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
                 disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading}
-                onClick={() => saveInlineEdit.mutate()}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
+                onClick={() => { stopEditActivity(); saveInlineEdit.mutate() }}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
         </>}
         <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
@@ -1131,15 +1205,16 @@ function Review() {
                 color={total >= 4.5 ? "green" : total >= 3.5 ? "blue" : total >= 2.5 ? "orange" : "red"}>{grade}</Tag>
             </div>
         </EvaluationWindow>
-        <Modal title="编辑追溯来源" width={760} open={Boolean(sourceEditBinding)} onCancel={() => setSourceEditBinding(undefined)}
+        <Modal title="编辑追溯来源" width={760} open={Boolean(sourceEditBinding)} onCancel={() => { stopEditActivity(); setSourceEditBinding(undefined) }}
             onOk={() => {
                 if (sourceEditBinding) setEditorDrafts(current => ({...current, [sourceEditBinding.edit_key]: sourceModalValues}));
+                stopEditActivity();
                 setSourceEditBinding(undefined)
             }} okText="确定" cancelText="取消">
             <div className="phase2-picker-selected">
                 <div className="phase2-picker-section-title">已选择 {sourceModalValues.length} 项</div>
                 <div className="phase2-picker-tags">{sourceModalValues.length ? sourceModalValues.map(value => <Tag closable key={value}
-                    onClose={event => { event.preventDefault(); setSourceModalValues(current => current.filter(item => item !== value)) }}>{sourceLabel(value)}</Tag>) :
+                    onClose={event => { event.preventDefault(); recordEditActivity(); setSourceModalValues(current => current.filter(item => item !== value)) }}>{sourceLabel(value)}</Tag>) :
                     <span className="phase2-picker-empty-inline">尚未选择追溯来源</span>}</div>
             </div>
             <Input allowClear className="phase2-picker-search" placeholder="搜索文件名、章节号或标题" value={sourcePickerSearch}
@@ -1147,25 +1222,27 @@ function Review() {
             <div className="phase2-picker-results phase2-source-picker-results">{visibleSourceOptions.length ? visibleSourceOptions.map(option => {
                 const checked = sourceModalValues.includes(option.value);
                 return <label key={option.value} className={`phase2-source-option${checked ? " is-selected" : ""}`}>
-                    <Checkbox checked={checked} onChange={event => setSourceModalValues(current => event.target.checked
-                        ? [...new Set([...current, option.value])] : current.filter(item => item !== option.value))}/>
+                    <Checkbox checked={checked} onChange={event => { recordEditActivity(); setSourceModalValues(current => event.target.checked
+                        ? [...new Set([...current, option.value])] : current.filter(item => item !== option.value)) }}/>
                     <span><b>{option.document_name} {option.number || option.title}</b>{option.number && option.title ? <small>{option.title}</small> : null}</span>
                 </label>
             }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的追溯来源"/>}</div>
         </Modal>
         <Modal title="选择硬件接口引用表格" width={960} open={Boolean(tableEditBinding)} onCancel={() => {
+            stopEditActivity();
             setTableEditBinding(undefined);
             setTablePreviewId(undefined)
         }}
             onOk={() => {
                 if (tableEditBinding) setEditorDrafts(current => ({...current, [tableEditBinding.edit_key]: tableModalValues}));
+                stopEditActivity();
                 setTableEditBinding(undefined);
                 setTablePreviewId(undefined)
             }} okText="确定" cancelText="取消">
             <div className="phase2-picker-selected">
                 <div className="phase2-picker-section-title">已选择 {tableModalValues.length} 张</div>
                 <div className="phase2-picker-tags">{tableModalValues.length ? tableModalValues.map(value => <Tag closable key={value}
-                    onClose={event => { event.preventDefault(); setTableModalValues(current => current.filter(item => item !== value)) }}>{tableLabel(value)}</Tag>) :
+                    onClose={event => { event.preventDefault(); recordEditActivity(); setTableModalValues(current => current.filter(item => item !== value)) }}>{tableLabel(value)}</Tag>) :
                     <span className="phase2-picker-empty-inline">尚未选择引用表格</span>}</div>
             </div>
             <Input allowClear className="phase2-picker-search" placeholder="搜索文件名、章节号、章节标题或表题" value={tablePickerSearch}
