@@ -24,6 +24,21 @@ type Props = {
     availableSourceRefs?: SourceRefOption[];
 };
 
+const sourceOptionIndexes = new WeakMap<SourceRefOption[], Map<string, SourceRefOption>>();
+const tableOptionIndexes = new WeakMap<SourceTableOption[], Map<string, SourceTableOption>>();
+const sourceOption = (values: SourceRefOption[] | undefined, key: string) => {
+    if (!values) return undefined;
+    let index = sourceOptionIndexes.get(values);
+    if (!index) { index = new Map(values.map(item => [item.value, item])); sourceOptionIndexes.set(values, index) }
+    return index.get(key)
+};
+const tableOption = (values: SourceTableOption[] | undefined, key: string) => {
+    if (!values) return undefined;
+    let index = tableOptionIndexes.get(values);
+    if (!index) { index = new Map(values.map(item => [item.table_id, item])); tableOptionIndexes.set(values, index) }
+    return index.get(key)
+};
+
 function TraceSourceLinks({targetId, links, onSource, inline = false, editing, binding, onEditSources, drafts, availableSourceRefs}: {
     targetId?: string;
     links: TraceLink[];
@@ -42,7 +57,7 @@ function TraceSourceLinks({targetId, links, onSource, inline = false, editing, b
     return <Wrapper className={inline ? "trace-source-links trace-source-links-inline" : "trace-source-links trace-source-links-block"}>
         <span className={`trace-source-label${editing && binding ? " phase2-editable-source" : ""}`} onClick={openEditor}>追溯来源：</span>
         {hasDraft ? draftRefs!.map(sourceRef => {
-            const option = availableSourceRefs?.find(item => item.value === sourceRef);
+            const option = sourceOption(availableSourceRefs, sourceRef);
             return <Tag color="blue" key={sourceRef} className="phase2-editable-source" onClick={openEditor}>
                 {option ? `${option.document_name} ${option.number || option.title}` : sourceRef}
             </Tag>
@@ -75,10 +90,12 @@ const measureTextWidth = (value: string, font: string, letterSpacing: string) =>
     return Math.max(...(value || "　").split("\n").map(line => context.measureText(line || "　").width + Math.max(line.length - 1, 0) * spacing));
 };
 
-function AutoSizeInlineEditor({value, tableCell, onChange}: {
+function AutoSizeInlineEditor({value, tableCell, onChange, onBlur, autoFocus}: {
     value: string;
     tableCell?: boolean;
     onChange: (value: string) => void;
+    onBlur?: () => void;
+    autoFocus?: boolean;
 }) {
     const editorRef = useRef<HTMLTextAreaElement>(null);
     const resize = useCallback(() => {
@@ -103,32 +120,29 @@ function AutoSizeInlineEditor({value, tableCell, onChange}: {
     }, [tableCell, value]);
 
     useEffect(() => {
-        const scheduleResize = () => queueResize(resize);
-        scheduleResize();
-        const parent = editorRef.current?.parentElement;
-        const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleResize);
-        if (parent) observer?.observe(parent);
-        window.addEventListener("resize", scheduleResize);
-        document.fonts?.ready.then(scheduleResize).catch(() => undefined);
-        return () => {
-            observer?.disconnect();
-            window.removeEventListener("resize", scheduleResize);
-            resizeQueue.delete(resize);
-        };
+        queueResize(resize);
+        return () => { resizeQueue.delete(resize) };
     }, [resize]);
 
     return <textarea ref={editorRef}
                      className={`phase2-inline-editor${tableCell ? " phase2-inline-editor-table-cell" : ""}`}
                      rows={1} wrap="soft" value={value} aria-label="可编辑文档内容"
+                     autoFocus={autoFocus} onBlur={onBlur}
                      onChange={event => onChange(event.target.value)}/>;
 }
 
 function EditablePart({part, editing, drafts, onDraft, tableCell}: {part: Phase2TextPart; editing?: boolean; drafts?: Record<string, unknown>; onDraft?: Props["onDraft"]; tableCell?: boolean}) {
+    const [active, setActive] = useState(false);
     if (!part.editable || !editing || !onDraft) return <>{part.text}</>;
     const binding = part.binding, draft = drafts?.[binding.edit_key] ?? binding.value;
     const value = Array.isArray(draft) ? draft.join("、") : String(draft ?? "");
-    return <AutoSizeInlineEditor tableCell={tableCell} value={value} onChange={nextValue => onDraft(binding,
-        Array.isArray(binding.value) ? nextValue.split(/[、,，]/u).map(item => item.trim()).filter(Boolean) : nextValue)}/>;
+    if (!active) return <span className="phase2-inline-edit-trigger" role="button" tabIndex={0}
+        onClick={() => setActive(true)} onKeyDown={event => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActive(true) }
+        }}>{value || "　"}</span>;
+    return <AutoSizeInlineEditor tableCell={tableCell} value={value} autoFocus onBlur={() => setActive(false)}
+        onChange={nextValue => onDraft(binding,
+            Array.isArray(binding.value) ? nextValue.split(/[、,，]/u).map(item => item.trim()).filter(Boolean) : nextValue)}/>;
 }
 
 const renderParts = (parts: Phase2TextPart[] | undefined, fallback: string | undefined, props: Pick<Props, "editing" | "drafts" | "onDraft">) =>
@@ -229,7 +243,7 @@ function Block({block, links, activeId, reviewScores, onSource, onEvaluate, edit
                 <div className="trace-source-links trace-source-links-block phase2-pending-requirement-sources">
                     <span className="trace-source-label">追溯来源：</span>
                     {(operation.initial_value?.source_refs || []).map(sourceRef => {
-                        const option = availableSourceRefs?.find(item => item.value === sourceRef);
+                        const option = sourceOption(availableSourceRefs, sourceRef);
                         return <Tag color="blue" key={sourceRef}>{option ? `${option.document_name} ${option.number || option.title}` : sourceRef}</Tag>
                     })}
                 </div>
@@ -270,7 +284,7 @@ function Block({block, links, activeId, reviewScores, onSource, onEvaluate, edit
                 <Button size="small" icon={<PlusOutlined/>} onClick={() => onEditTables?.(block.selectionBinding!)}>选择{selectionRole}表格</Button>
             </div>
             {hasDraft && selectedIds.map(tableId => {
-                const option = availableTables?.find(item => item.table_id === tableId);
+                const option = tableOption(availableTables, tableId);
                 return option ? <div className="phase2-source-table-preview phase2-source-table-inline-preview" key={tableId}>
                     <div className="phase2-table-caption">{option.title || option.table_id}</div>
                     <div dangerouslySetInnerHTML={{__html: option.table_html}}/>

@@ -406,7 +406,7 @@ html, body, #root {
     background: #fff;
     box-shadow: 0 2px 12px #102a4326;
     color: #111;
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     line-height: 1.5
 }
@@ -417,7 +417,7 @@ html, body, #root {
 }
 
 .phase2-document > header h1 {
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     font-weight: 700;
     line-height: 3;
@@ -442,7 +442,7 @@ html, body, #root {
 }
 
 .phase2-heading-line h1, .phase2-heading-line h2, .phase2-heading-line h3, .phase2-heading-line h4, .phase2-heading-line h5 {
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     font-weight: 700;
     margin: 0;
@@ -460,7 +460,7 @@ html, body, #root {
 }
 
 .phase2-paragraph p {
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     line-height: 1.5;
     margin: 0 0 8px;
@@ -488,6 +488,26 @@ html, body, #root {
   resize: none;
   box-sizing: border-box;
 }
+.phase2-inline-edit-trigger {
+  display: inline;
+  min-width: 1em;
+  border: 1px dashed #91caff;
+  border-radius: 4px;
+  background: rgba(230, 244, 255, .35);
+  cursor: text;
+  transition: border-color .15s, background .15s;
+}
+.phase2-inline-edit-trigger:hover,
+.phase2-inline-edit-trigger:focus {
+  outline: none;
+  border-color: #1677ff;
+  background: rgba(230, 244, 255, .82);
+}
+.phase2-table td .phase2-inline-edit-trigger,
+.phase2-table th .phase2-inline-edit-trigger { display: block; width: 100%; }
+.phase2-publication-status { margin: 12px 20px; }
+.phase2-publication-status .ant-progress { margin: 4px 0; }
+.phase2-chapter { content-visibility: auto; contain-intrinsic-size: auto 1200px; }
 .phase2-inline-editor:hover { border-color: #4096ff; background: rgba(230, 244, 255, .82); }
 .phase2-inline-editor:focus { outline: none; border-color: #1677ff; border-style: solid; background: #f0f7ff; box-shadow: 0 0 0 2px rgba(22, 119, 255, .1); }
 .phase2-editable-source { cursor: pointer; outline: 1px dashed #1677ff; }
@@ -499,12 +519,18 @@ html, body, #root {
     background: rgba(255, 255, 255, .08);
 }
 
+.header .phase2-edit-button.ant-btn-background-ghost:disabled {
+    color: rgba(255, 255, 255, .62);
+    border-color: rgba(255, 255, 255, .3);
+    background: rgba(255, 255, 255, .08);
+}
+
 .phase2-list {
     margin: 0
 }
 
 .phase2-list p {
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     line-height: 1.5;
     margin: 0 0 8px;
@@ -518,7 +544,7 @@ html, body, #root {
 }
 
 .phase2-table-caption {
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 16px;
     font-weight: 400;
     line-height: 1.5;
@@ -538,19 +564,15 @@ html, body, #root {
     padding: 7px 9px;
     vertical-align: middle;
     white-space: pre-wrap;
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 14px;
     font-weight: 400;
-    line-height: 1.5
-}
-
-.phase2-table th {
+    line-height: 1;
     text-align: center
 }
 
-.phase2-table td:first-child {
-    text-align: center
-}
+.phase2-table th { text-align: center }
+.phase2-table .trace-source-links { justify-content: center }
 
 .phase2-table th { position: relative; }
 .phase2-table td { position: relative; }
@@ -610,7 +632,7 @@ html, body, #root {
     border: 1px dashed #95de64;
     border-radius: 6px;
     background: #f6ffed;
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     white-space: pre-wrap;
 }
 .phase2-pending-requirement-title {
@@ -644,7 +666,7 @@ html, body, #root {
     border: 1px dashed #91caff;
     border-radius: 6px;
     background: #f6fbff;
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
 }
 .phase2-table-selector-summary {
     width: 100%;
@@ -672,10 +694,22 @@ html, body, #root {
     border: 1px solid #d9d9d9;
     border-radius: 6px;
     overflow: auto;
+    font-family: "SimSun", "宋体", serif;
 }
 .phase2-source-table-preview table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .phase2-source-table-preview th,
-.phase2-source-table-preview td { border: 1px solid #999; padding: 5px 7px; }
+.phase2-source-table-preview td {
+    border: 1px solid #999;
+    padding: 5px 7px;
+    line-height: 1;
+    text-align: center !important;
+    vertical-align: middle !important;
+}
+.phase2-source-table-preview th *,
+.phase2-source-table-preview td * {
+    line-height: 1 !important;
+    text-align: center !important;
+}
 
 .phase2-picker-selected {
     padding: 12px 14px;
@@ -786,7 +820,7 @@ html, body, #root {
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    font-family: "SimSun", "宋体", serif;
+    font-family: "Times New Roman", "SimSun", "宋体", serif;
     font-size: 14px;
     line-height: 1.5
 }

@@ -72,10 +72,15 @@ model Phase2EditRun {
   currentStage String?
   progress Int @default(0)
   expectedRevision String
+  savedRevision String?
   backupPath String?
   errorMessage String?
   request Json
+  applyResult Json?
   startedAt DateTime?
+  savedAt DateTime?
+  publishedAt DateTime?
+  stageTimings Json?
   finishedAt DateTime?
   createdAt DateTime @default(now())
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)

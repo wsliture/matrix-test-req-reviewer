@@ -76,8 +76,10 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         const dataDir = path.join(workspace, ".matrix", "data");
         await mkdir(dataDir, {recursive: true});
         await writeFile(path.join(dataDir, "chapter2-system-overview.json"), JSON.stringify({
+            system_relationship: "下位机与上位机交换数据。",
             processor_type: "BM3803",
             processor_frequency: "48MHz",
+            memory_io_summary: "存储器地址空间见下表",
             memory_io_tables: [{
                 title: "P1端口定义",
                 columns: ["序号", "IO口", "用途", "备注"],
@@ -95,10 +97,16 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         }));
         const document = await buildPhase2Document(workspace, [{id: "chapter2", businessId: "chapter2", artifact: "chapter2-system-overview.json", parentId: null}]);
         const chapter = document.chapters.find(item => item.number === "2");
-        const processor = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.startsWith("b. "));
+        const relationship = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.includes("下位机与上位机"));
+        const processor = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.startsWith("a. "));
+        const memorySummary = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.startsWith("b. "));
+        const interruptLead = chapter?.blocks.find(block => block.type === "paragraph" && block.text?.startsWith("c. "));
         const memory = chapter?.blocks.find(block => block.type === "table" && block.caption?.includes("P1端口定义"));
         const interrupt = chapter?.blocks.find(block => block.type === "table" && block.caption?.includes("中断使用说明"));
-        expect(processor?.text).toBe("b. CPU：BM3803，主频：48MHz");
+        expect(relationship?.text).toBe("下位机与上位机交换数据。");
+        expect(processor?.text).toBe("a. CPU：BM3803，主频：48MHz");
+        expect(memorySummary?.text).toBe("b. 存储器地址空间见下表，具体见表2-1至表2-1。");
+        expect(interruptLead?.text).toBe("c. 中断使用情况如下表：");
         expect(memory?.cellBindings?.[0].map(item => item?.kind)).toEqual([
             "table_cell", "table_cell", "table_cell", "table_cell"
         ]);

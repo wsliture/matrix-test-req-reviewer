@@ -56,7 +56,7 @@ const TEST_TYPES = [
     ["TR-DS-ALL", "代码审查"], ["TR-JF-ALL", "静态分析"], ["TR-LJ-ALL", "逻辑测试"]
 ];
 const BASE_CHAPTER1_REFERENCES = [
-    ["GJB/Z 141-2004", "军用软件测试指南"],
+    ["TE-GTCG-003-2021", "军用软件测试指南"],
     ["QJ 3027A-2016", "航天型号软件测试规范"],
     ["Q/QJA 300-2014", "航天型号软件测试规范"],
     ["GB/T 25000.51-2016", "系统与软件工程 系统与软件质量要求和评价（SQuaRE） 就绪可用软件产品（RUSP）的质量要求和测试细则"],
@@ -194,9 +194,9 @@ function chapter2(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
         blocks: Phase2Block[] = [heading("2 系统概述", 1, root?.id, refs(data), root?.businessId, true), heading("2.1 运行环境说明", 2)];
     const rootBinding = (field: string, value: unknown, kind?: Phase2EditBinding["kind"]) => binding(artifact, root?.id, field, value, {}, kind);
     blocks[0].sourceBinding = rootBinding("source_refs", refs(data), "source_refs");
-    blocks.push(richParagraph([{text: "a. "}, editablePart(data.system_relationship, rootBinding("system_relationship", data.system_relationship, "multiline"))]),
-        richParagraph([{text: "b. CPU："}, editablePart(data.processor_type, rootBinding("processor_type", data.processor_type)), {text: "，主频："}, editablePart(data.processor_frequency, rootBinding("processor_frequency", data.processor_frequency))]),
-        richParagraph([{text: "c. "}, editablePart(data.memory_io_summary, rootBinding("memory_io_summary", data.memory_io_summary, "multiline")), {text: data.memory_io_tables?.length ? `，具体见表2-1至表2-${data.memory_io_tables.length}。` : ""}]));
+    blocks.push(richParagraph([editablePart(data.system_relationship, rootBinding("system_relationship", data.system_relationship, "multiline"))]),
+        richParagraph([{text: "a. CPU："}, editablePart(data.processor_type, rootBinding("processor_type", data.processor_type)), {text: "，主频："}, editablePart(data.processor_frequency, rootBinding("processor_frequency", data.processor_frequency))]),
+        richParagraph([{text: "b. "}, editablePart(data.memory_io_summary, rootBinding("memory_io_summary", data.memory_io_summary, "multiline")), {text: data.memory_io_tables?.length ? `，具体见表2-1至表2-${data.memory_io_tables.length}。` : ""}]));
     (data.memory_io_tables || []).forEach((item: Json, index: number) => {
         const value = normalizedTable(item, `存储器及I/O说明表${index + 1}`);
         if (!value) return;
@@ -219,7 +219,7 @@ function chapter2(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
     interrupt.tableBinding = {container_key: editKey({artifact, field: "interrupts"}), allow_add_row: true, allow_delete_row: true,
         allow_add_column: false, allow_delete_column: false,
         row_keys: (interrupt.rows || []).map((_, rowIndex) => editKey({artifact, field: `interrupts.${rowIndex}`})), column_keys: [], new_row_columns: interrupt.columns};
-    blocks.push(paragraph("d. 中断使用情况如下表："), interrupt);
+    blocks.push(paragraph("c. 中断使用情况如下表："), interrupt);
     blocks.push(heading("2.2 软件概述", 2), richParagraph([editablePart(data.software_name_and_id, rootBinding("software_name_and_id", data.software_name_and_id)), {text: "的软件级别为"}, editablePart(data.software_level, rootBinding("software_level", data.software_level)), {text: "，采用"}, editablePart(data.programming_language, rootBinding("programming_language", data.programming_language)), {text: "开发。"}]), paragraph("软件主要功能如下："), ...list(data.subsystem_and_software_functions).map((item, index) => richParagraph([{text: `${alpha(index)}. `}, editablePart(item, rootBinding(`subsystem_and_software_functions.${index}`, item, "list_item")), {text: /[；。]$/.test(item) ? "" : "；"}])), heading("2.3 开发环境概述", 2), richParagraph([editablePart(data.development_platform, rootBinding("development_platform", data.development_platform)), {text: "，"}, editablePart(data.compilation_environment, rootBinding("compilation_environment", data.compilation_environment)), {text: "。"}]));
     return blocks
 }

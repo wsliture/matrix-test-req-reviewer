@@ -76,7 +76,7 @@ export class Phase2EditsService {
             ]);
             throw error
         }
-        return run
+        return {...run, publicationStatus: "QUEUED" as const}
     }
 
     async inlineDescribe(projectId: string) {
@@ -114,10 +114,28 @@ export class Phase2EditsService {
             return created
         });
         await queue.add("phase2-edit", {editRunId: run.id}, {jobId: run.id, removeOnComplete: 100, removeOnFail: 100});
-        return run
+        return {...run, publicationStatus: "QUEUED" as const}
     }
 
-    get(id: string) { return this.db.phase2EditRun.findUniqueOrThrow({where: {id}}) }
+    async get(id: string) {
+        const run = await this.db.phase2EditRun.findUniqueOrThrow({where: {id}});
+        const publicationStatus = run.status === "FAILED" ? "FAILED" : run.publishedAt ? "PUBLISHED" : run.savedAt ? "BUILDING" : "QUEUED";
+        return {...run, publicationStatus}
+    }
+
+    async retry(id: string, user: {id: string; role: string}) {
+        if (!( ["ADMIN", "REVIEWER"] as string[]).includes(user.role)) throw new ForbiddenException("当前角色没有编辑权限");
+        const run = await this.db.phase2EditRun.findUniqueOrThrow({where: {id}});
+        if (run.status !== "FAILED" || !run.savedAt || !run.applyResult) throw new ConflictException("只有已保存编辑稿且发布失败的任务可以重试");
+        const active = await this.db.phase2EditRun.findFirst({where: {projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+        if (active) throw new ConflictException("该项目已有编辑重建任务");
+        await this.db.$transaction([
+            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "resume_publish", progress: 15, errorMessage: null, finishedAt: null}}),
+            this.db.project.update({where: {id: run.projectId}, data: {status: "REBUILDING"}})
+        ]);
+        await queue.add("phase2-edit-retry", {editRunId: id, rebuildOnly: true}, {jobId: `${id}-retry-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
+        return {...await this.db.phase2EditRun.findUniqueOrThrow({where: {id}}), publicationStatus: "BUILDING" as const}
+    }
 }
 
 @Controller()
@@ -134,4 +152,5 @@ export class Phase2EditsController {
         return this.edits.createBatch(projectId, req.user, body)
     }
     @Get("phase2-edit-runs/:runId") get(@Param("runId") runId: string) { return this.edits.get(runId) }
+    @Post("phase2-edit-runs/:runId/retry") retry(@Param("runId") runId: string, @Req() req: any) { return this.edits.retry(runId, req.user) }
 }

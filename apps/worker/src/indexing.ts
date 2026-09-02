@@ -363,14 +363,14 @@ async function indexRequirements(db: Db, projectId: string, workspace: string, r
     for (const item of drafts) for (const sourceRef of item.sourceRefs) await add(sourceRef, item.businessId, item.artifact)
 }
 
-export async function indexProject(db: Pool, projectId: string, workspace: string, renames: RequirementIdRename[] = []) {
+export async function indexProject(db: Pool, projectId: string, workspace: string, renames: RequirementIdRename[] = [], options: {skipDocuments?: boolean} = {}) {
     await rm(path.join(path.dirname(workspace), "preview"), {recursive: true, force: true});
     const client = await db.connect();
     try {
         await client.query("begin");
         const projectLock = await client.query('select id from "Project" where id=$1 for update', [projectId]);
         if (!projectLock.rowCount) throw new Error(`无法索引不存在的项目：${projectId}`);
-        await indexDocuments(client, projectId, workspace);
+        if (!options.skipDocuments) await indexDocuments(client, projectId, workspace);
         await indexRequirements(client, projectId, workspace, renames);
         await client.query("commit")
     } catch (error) {

@@ -347,6 +347,12 @@ const CHAPTERS = [
 ] as const;
 
 const STAGE_NAMES: Record<string, string> = {
+    backup: "创建发布快照",
+    apply: "保存编辑稿",
+    saved: "编辑稿已保存",
+    resume_publish: "重新发布已保存编辑稿",
+    index: "更新测试需求索引",
+    publish_failed: "发布失败",
     discover_documents: "识别源文档",
     prepare_document_artifacts: "准备文档工件",
     prepare_chapter1_scope: "准备第一章：范围",
@@ -675,6 +681,7 @@ function Review() {
     const [tableOperations, setTableOperations] = useState<Phase2TableOperation[]>([]);
     const [requirementOperations, setRequirementOperations] = useState<Phase2RequirementOperation[]>([]);
     const [editRunId, setEditRunId] = useState<string>();
+    const acknowledgedSavedRun = useRef<string | undefined>(undefined);
     useEffect(() => {
         if (!documentEditing) return;
         const warnAboutUnsubmittedForm = (event: BeforeUnloadEvent) => {
@@ -686,18 +693,31 @@ function Review() {
         return () => window.removeEventListener("beforeunload", warnAboutUnsubmittedForm)
     }, [documentEditing]);
     const inlineEditor = useQuery({queryKey: ["phase2-editor-inline", id],
-        queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`), enabled: documentEditing});
+        queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`),
+        staleTime: Infinity, gcTime: 30 * 60_000});
     const editRun = useQuery({queryKey: ["phase2-edit-run", editRunId],
         queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
         refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
     const rebuilding = projectState.data?.status === "REBUILDING" || Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
-    useEffect(() => { if (editRun.data?.status === "SUCCEEDED") { setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined); void qc.invalidateQueries({queryKey: ["review-data", id]}); void qc.invalidateQueries({queryKey: ["reviews", id]}) } }, [editRun.data?.status, id, qc]);
+    useEffect(() => {
+        if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
+        acknowledgedSavedRun.current = editRun.data.id;
+        setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]);
+        setSourceEditBinding(undefined); setTableEditBinding(undefined);
+        void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
+        message.success("修改已保存，测试需求文档正在后台发布")
+    }, [editRun.data?.savedAt, editRun.data?.id, id, qc]);
+    useEffect(() => { if (editRun.data?.status === "SUCCEEDED") {
+        void qc.invalidateQueries({queryKey: ["review-data", id]}); void qc.invalidateQueries({queryKey: ["reviews", id]})
+    } }, [editRun.data?.status, id, qc]);
     const saveInlineEdit = useMutation({mutationFn: () => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
         method: "POST", body: JSON.stringify({expected_revision: inlineEditor.data?.revision,
             changes: Object.entries(editorDrafts).map(([edit_key, value]) => ({edit_key, value})),
             table_operations: tableOperations.map(({draft_key: _draftKey, ...operation}) => operation),
             requirement_operations: requirementOperations.map(({draft_key: _draftKey, ...operation}) => operation)})
     }), onSuccess: run => setEditRunId(run.id)});
+    const retryPublication = useMutation({mutationFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}/retry`, {method: "POST"}),
+        onSuccess: run => { setEditRunId(run.id); void editRun.refetch() }, onError: error => message.error(error.message)});
     const [mainSizes, setMainSizes] = useState<SplitSizes | undefined>(() => loadSplitSizes("main"));
     const [sourceDirectoryOpen, setSourceDirectoryOpen] = useState(false);
     const [requirementDirectoryOpen, setRequirementDirectoryOpen] = useState(false);
@@ -1036,14 +1056,16 @@ function Review() {
         exportReport.mutate()
     };
     const sourceOptions = [...new Map((inlineEditor.data?.available_source_refs || []).map(option => [option.value, option])).values()];
+    const sourceOptionMap = new Map(sourceOptions.map(option => [option.value, option]));
     const sourceLabel = (value: string) => {
-        const option = sourceOptions.find(item => item.value === value);
+        const option = sourceOptionMap.get(value);
         return option ? `${option.document_name} ${option.number || option.title}` : value
     };
     const tableOptions = inlineEditor.data?.available_tables || [];
+    const tableOptionMap = new Map(tableOptions.map(option => [option.table_id, option]));
     const tableDocumentName = (value: string) => value.split(/[\\/]/).filter(Boolean).at(-1) || value;
     const tableLabel = (value: string) => {
-        const option = tableOptions.find(item => item.table_id === value);
+        const option = tableOptionMap.get(value);
         return option ? `${tableDocumentName(option.document_name)} ${option.section_number || option.section_title} · ${option.title}` : value
     };
     const sourceNeedle = sourcePickerSearch.trim().toLowerCase();
@@ -1053,20 +1075,21 @@ function Review() {
     const visibleTableOptions = tableOptions.filter(option => tableNeedle
         ? [option.document_name, option.section_number, option.section_title, option.title].join(" ").toLowerCase().includes(tableNeedle)
         : tableModalValues.includes(option.table_id)).slice(0, 30);
-    const previewTable = tableOptions.find(option => option.table_id === tablePreviewId);
+    const previewTable = tableOptionMap.get(tablePreviewId || "");
     const toggleTableSelection = (tableId: string, checked?: boolean) => setTableModalValues(current => {
         const shouldSelect = checked ?? !current.includes(tableId);
         return shouldSelect ? [...new Set([...current, tableId])] : current.filter(item => item !== tableId)
     });
     const exportActions = <Space>
-        {!documentEditing ? <Button ghost icon={<EditOutlined/>} disabled={rebuilding}
+        {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={rebuilding || inlineEditor.isLoading}
+            loading={inlineEditor.isLoading}
             onClick={() => { setEditorDrafts({}); setDocumentEditing(true) }}>编辑文档</Button> : <>
             <Button ghost disabled={rebuilding} onClick={() => { setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined) }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
                 disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading}
                 onClick={() => saveInlineEdit.mutate()}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
         </>}
-        <Button ghost icon={<DownloadOutlined/>} disabled={rebuilding} loading={downloadRequirements.isPending}
+        <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
         <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
                 icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={rebuilding}
@@ -1184,10 +1207,19 @@ function Review() {
                 <div className="phase2-source-table-preview" dangerouslySetInnerHTML={{__html: previewTable.table_html}}/>
             </div> : null}
         </Drawer>
-        {rebuilding && <Modal open closable={false} footer={null} title="正在确定性重建测试需求">
-            <Progress percent={editRun.data?.progress || 0}/><p>{editRun.data?.currentStage || "排队中"}</p>
-        </Modal>}
-        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="重建失败，已恢复原版本" description={editRun.data.errorMessage}/>}
+        {rebuilding && <Alert className="phase2-publication-status" type="info" showIcon
+            message={editRun.data?.savedAt ? "修改已保存，正在后台发布新文档" : "正在保存修改"}
+            description={<>
+                <Progress size="small" percent={editRun.data?.progress || 0}/>
+                <span>当前阶段：{editRun.data?.currentStage ? stageName(editRun.data.currentStage) : "排队中"}</span>
+            </>}
+        />}
+        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="文档发布失败，继续使用上一发布版本"
+            description={editRun.data.errorMessage}
+            action={<Button size="small" loading={retryPublication.isPending} onClick={() => retryPublication.mutate()}>
+                重试发布
+            </Button>}
+        />}
         {saveInlineEdit.error && <Alert type="error" showIcon message="提交失败" description={saveInlineEdit.error.message}/>}
         <Drawer className="review-center-drawer" width={520} title="评审中心" open={reviewCenterOpen}
                 onClose={() => setReviewCenterOpen(false)}

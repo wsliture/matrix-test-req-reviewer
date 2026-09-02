@@ -275,5 +275,7 @@ export type SourceTableOption = {table_id: string; title: string; source_ref: st
 export type Phase2EditorDescriptor = {artifact: string; business_id?: string; revision: string;
     operation_capabilities: {update: boolean; add: boolean; delete: boolean}; form_schema: EditorField[];
     value: Record<string, unknown>; available_source_refs: SourceRefOption[]};
-export type Phase2EditRun = {id: string; status: string; progress: number; currentStage?: string; errorMessage?: string; finishedAt?: string};
+export type Phase2EditRun = {id: string; status: string; progress: number; currentStage?: string; errorMessage?: string;
+    savedAt?: string; savedRevision?: string; publishedAt?: string; publicationStatus?: "QUEUED" | "BUILDING" | "PUBLISHED" | "FAILED";
+    stageTimings?: Record<string, {startedAt: string; finishedAt: string; durationMs: number}>; startedAt?: string; finishedAt?: string};
 export type Phase2InlineDescriptor = {revision: string; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};

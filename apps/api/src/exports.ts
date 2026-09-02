@@ -200,8 +200,14 @@ export class ExportsController {
 
     @Get(":id/test-requirements-docx") async testRequirements(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id),
-            reportDirectory = path.resolve(project.workspacePath, ".matrix", "reports");
-        if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能下载");
+            publishedReportDirectory = path.resolve(project.workspacePath, ".matrix", "reports");
+        let reportDirectory = publishedReportDirectory, previousPublication = false;
+        if (project.status === "REBUILDING") {
+            const edit = await this.db.phase2EditRun.findFirst({where: {projectId: id, status: {in: ["QUEUED", "RUNNING"]}, backupPath: {not: null}}, orderBy: {createdAt: "desc"}});
+            if (!edit?.backupPath) throw new ConflictException("项目正在首次生成，暂时没有可下载的已发布版本");
+            reportDirectory = path.resolve(edit.backupPath, ".matrix", "reports");
+            previousPublication = true
+        }
         const candidates = ["phase2-test-requirements.docx", "phase2-test-requirement.docx"];
         for (const filename of candidates) {
             const candidate = path.resolve(reportDirectory, filename);
@@ -209,6 +215,7 @@ export class ExportsController {
             try {
                 if ((await stat(candidate)).size <= 0) continue;
                 const downloadName = `${cleanProjectName(project.name)}-AI生成第三方测试需求.docx`;
+                if (previousPublication) reply.header("X-Matrix-Publication-Version", "previous");
                 return reply.type(DOCX_TYPE).header("Content-Disposition", contentDisposition(downloadName)).send(createReadStream(candidate))
             } catch {
                 // Continue to the compatible filename.
