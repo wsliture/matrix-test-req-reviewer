@@ -2,13 +2,14 @@ import {readFile} from "node:fs/promises";
 import path from "node:path";
 
 type Json = Record<string, any>;
-export type Phase2EditBinding = {edit_key: string; node_id: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]};
+export type Phase2EditBinding = {edit_key: string; node_id: string; field?: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]; options?: string[]};
 export type Phase2RequirementBinding = {
     container_key: string;
     allow_add: boolean;
     prefix: string;
     mode: "functional" | "non_functional" | "interface";
     interface_label?: string;
+    related_description_options?: string[];
 };
 export type Phase2TextPart = {text: string; editable?: false} | {text: string; editable: true; binding: Phase2EditBinding};
 export type Phase2Block = {
@@ -96,8 +97,8 @@ const heading = (value: string, level: number, anchorId?: string, sourceRefs?: s
 });
 const paragraph = (value: unknown): Phase2Block => ({type: "paragraph", text: text(value)});
 const editKey = (value: Json) => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-const binding = (artifact: string, nodeId: string | undefined, field: string, value: unknown, extra: Json = {}, kind: Phase2EditBinding["kind"] = "text"): Phase2EditBinding | undefined =>
-    nodeId ? {edit_key: editKey({artifact, field, ...extra}), node_id: nodeId, kind, value: Array.isArray(value) ? value.map(text) : text(value)} : undefined;
+const binding = (artifact: string, nodeId: string | undefined, field: string, value: unknown, extra: Json = {}, kind: Phase2EditBinding["kind"] = "text", options?: string[]): Phase2EditBinding | undefined =>
+    nodeId ? {edit_key: editKey({artifact, field, ...extra}), node_id: nodeId, field, kind, value: Array.isArray(value) ? value.map(text) : text(value), ...(options?.length ? {options} : {})} : undefined;
 const editablePart = (value: unknown, valueBinding?: Phase2EditBinding): Phase2TextPart => valueBinding ? {text: text(value), editable: true, binding: valueBinding} : {text: text(value)};
 const richParagraph = (parts: Phase2TextPart[], anchorId?: string, sourceBinding?: Phase2EditBinding): Phase2Block => ({type: "paragraph", parts, text: parts.map(part => part.text).join(""), anchorId, sourceBinding});
 const table = (caption: string, columns: string[], rows: unknown[][]): Phase2Block => ({
@@ -441,6 +442,14 @@ const NON_FUNCTIONAL: Record<string, { description: string; prefix: string; noun
     "4.8": {description: "recovery_requirement_description", prefix: "TR-HF", noun: "恢复性"},
     "4.9": {description: "strength_requirement_description", prefix: "TR-QD", noun: "强度"}
 };
+const RELATED_DESCRIPTION_OPTIONS: Record<string, string[]> = {
+    "4.2": ["时间间隔", "处理时间", "处理精度", "响应时间", "隐含需求：时间间隔", "隐含需求：处理时间", "隐含需求：处理精度", "隐含需求：响应时间"],
+    "4.4": ["提高安全性的容错方案", "异常条件下系统的处理和保护能力", "异常条件下软件的处理和保护能力", "输入故障模式的测试"],
+    "4.5": ["存储量的余量", "功能处理时间的余量", "输入/输出及通道的吞吐能力余量"],
+    "4.7": ["数据采集", "数据转换", "数据剔除", "数据融合", "数据解释"],
+    "4.8": ["故障发生时保护系统状态", "切换备用硬件", "探测错误功能"],
+    "4.9": ["长时间连续不间断综合功能测试", "提供数据能力的饱和性试验指标"]
+};
 
 function nonFunctional(data: Json, artifact: string, number: string, title: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const config = NON_FUNCTIONAL[number], root = lookup.root(artifact), rows = data.rows || [],
@@ -456,10 +465,11 @@ function nonFunctional(data: Json, artifact: string, number: string, title: stri
     summary.cellBindings = renderedRows.map((row, index) => {
         const nodeId = summary.rowAnchorIds?.[index], requirementId = row[2], extra = {business_id: requirementId};
         return [undefined, binding(artifact, nodeId, config.description, rows[index]?.[config.description], extra, "multiline"), undefined,
-            binding(artifact, nodeId, "related_description", rows[index]?.related_description, extra, "multiline")]
+            binding(artifact, nodeId, "related_description", rows[index]?.related_description, extra, "multiline", RELATED_DESCRIPTION_OPTIONS[number])]
     });
     summary.rowSourceBindings = renderedRows.map((row, index) => binding(artifact, summary.rowAnchorIds?.[index], "source_refs", refs(rows[index]), {business_id: row[2]}, "source_refs"));
-    const baseBinding: Phase2RequirementBinding = {container_key: editKey({artifact, field: "rows"}), allow_add: number !== "4.3", prefix: config.prefix, mode: "non_functional"};
+    const baseBinding: Phase2RequirementBinding = {container_key: editKey({artifact, field: "rows"}), allow_add: number !== "4.3", prefix: config.prefix,
+        mode: "non_functional", related_description_options: RELATED_DESCRIPTION_OPTIONS[number]};
     summary.requirementBinding = baseBinding;
     summary.rowRequirementKeys = renderedRows.map(row => editKey({artifact, business_id: row[2], field: number === "4.3" ? "interface_requirement_description" : config.description}));
     const blocks: Phase2Block[] = [heading(`${number} ${title}`, 2, root?.id, refs(data), root?.businessId), heading(`${sectionNo} ${sectionTitle}`, 3, sectionNode?.id, refs(data), sectionNode?.businessId, true), paragraph(`依据引用文档及上述测试需求分析，共总结如下 ${rows.length} 项${config.noun}需求：`), summary];
@@ -485,8 +495,8 @@ function traceability(data: Json, artifact: string, lookup: ReturnType<typeof ma
     return [heading("6 测试需求覆盖性说明", 1, root?.id, refs(data), root?.businessId), paragraph(`经过上述的测试需求分析过程，共总结出测试点 ${requirementCount} 项。`), paragraph("本测试需求总结的测试点覆盖了需求规格说明书的内容，具体的对应关系如下表。"), table("表6-1  测试需求覆盖表", ["文档名称", "章节号", "标题名称", "测试需求标识"], rows.map((row: Json) => [row.document_name, row.section_number || row.section_no || row.source_section_no, row.section_title, row.test_requirement_ids?.length ? compressRequirementIds(row.test_requirement_ids).join("\n") : "非测试需求项"]))]
 }
 
-export async function buildPhase2Document(workspacePath: string, requirements: any[]) {
-    const dataDir = path.join(workspacePath, ".matrix", "data"), lookup = maps(requirements),
+export async function buildPhase2DocumentFromDataDir(dataDir: string, requirements: any[]) {
+    const lookup = maps(requirements),
         chapters: Phase2Chapter[] = [];
     for (const [artifact, number, title] of FILES) {
         try {
@@ -515,4 +525,8 @@ export async function buildPhase2Document(workspacePath: string, requirements: a
         }
     }
     return {chapters}
+}
+
+export async function buildPhase2Document(workspacePath: string, requirements: any[]) {
+    return buildPhase2DocumentFromDataDir(path.join(workspacePath, ".matrix", "data"), requirements)
 }

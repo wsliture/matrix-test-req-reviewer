@@ -1,9 +1,10 @@
 import {Worker} from "bullmq";
 import type {Redis} from "ioredis";
 import type {Pool} from "pg";
-import {cp, mkdir, readFile, stat, writeFile} from "node:fs/promises";
+import {cp, mkdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {indexProject} from "./indexing.js";
+import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
 
 const auth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
 const baseUrl = process.env.MATRIX_PHASE2_RUNNER_URL || "http://localhost:4097";
@@ -54,8 +55,9 @@ export function requestedArtifacts(request: any) {
     return [...artifacts]
 }
 
-async function backup(workspace: string, runId: string, request: any) {
-    const root = path.join(workspace, ".matrix", "history", "phase2-edits", runId);
+export async function backupPhase2Edit(workspace: string, runId: string, request: any, mutationFiles: string[]) {
+    const root = path.join(workspace, ".matrix", "history", "rollback", runId);
+    await rm(root, {recursive: true, force: true});
     await mkdir(root, {recursive: true});
     const files = new Set<string>([".matrix/data/phase2-test-traceability.json",
         ".matrix/reports/phase2-test-traceability.docx", ".matrix/reports/phase2-test-requirements.docx"]);
@@ -67,19 +69,25 @@ async function backup(workspace: string, runId: string, request: any) {
             files.add(".matrix/reports/functional-other-content.docx")
         }
     }
-    const copied: string[] = [];
+    for (const file of mutationFiles) {
+        const relative = path.relative(workspace, path.resolve(file));
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`非法编辑备份路径: ${file}`);
+        files.add(relative)
+    }
+    const copied: string[] = [], absent: string[] = [];
     for (const relative of files) {
         const source = path.join(workspace, relative), target = path.join(root, relative);
         try { await stat(source); await mkdir(path.dirname(target), {recursive: true}); await cp(source, target); copied.push(relative) }
-        catch (error: any) { if (error?.code !== "ENOENT") throw error }
+        catch (error: any) { if (error?.code === "ENOENT") absent.push(relative); else throw error }
     }
-    await writeFile(path.join(root, "manifest.json"), JSON.stringify({files: copied}, null, 2));
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify({files: copied, absent}, null, 2));
     return root
 }
 
-async function restore(workspace: string, root: string) {
+export async function restorePhase2Edit(workspace: string, root: string) {
     const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
     for (const relative of manifest.files || []) await copyIfExists(path.join(root, relative), path.join(workspace, relative))
+    for (const relative of manifest.absent || []) await rm(path.join(workspace, relative), {recursive: true, force: true})
 }
 
 export function startPhase2EditWorker(connection: Redis, db: Pool) {
@@ -90,6 +98,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         const projectLock = `phase2-edit-lock:${row.projectId}`, token = `${process.pid}-${Date.now()}`;
         if (await connection.set(projectLock, token, "PX", 30 * 60_000, "NX") !== "OK") throw new Error("项目已有编辑重建任务");
         let backupPath = "";
+        let publishedRevisionId = "";
         let editSaved = Boolean(row.savedAt);
         const rebuildOnly = job.data.rebuildOnly === true;
         const stageTimings: Record<string, {startedAt: string; finishedAt: string; durationMs: number}> = {};
@@ -112,7 +121,8 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 if (!applied) throw new Error("缺少已保存编辑稿的发布上下文")
             } else {
                 await db.query(`update "Phase2EditRun" set status='RUNNING',"startedAt"=now(),"currentStage"='backup',progress=5 where id=$1`, [runId]);
-                backupPath = await timed("backup", () => backup(row.workspacePath, runId, request));
+                const mutation = await call<{files?: string[]}>("/v1/phase2/editor/mutation-files", request);
+                backupPath = await timed("backup", () => backupPhase2Edit(row.workspacePath, runId, request, mutation.files || []));
                 await db.query(`update "Phase2EditRun" set "backupPath"=$1,"currentStage"='apply',progress=10 where id=$2`, [backupPath, runId]);
                 applied = await timed("apply", () => call<any>(batch ? "/v1/phase2/editor/apply-batch" : "/v1/phase2/editor/apply", request));
                 await db.query(`update "Phase2EditRun" set "savedAt"=now(),"savedRevision"=$1,"applyResult"=$2,"currentStage"='saved',progress=15 where id=$3`,
@@ -139,6 +149,12 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             if ((await stat(total)).size === 0) throw new Error("重建后的总DOCX为空");
             await db.query(`update "Phase2EditRun" set "currentStage"='index',progress=90 where id=$1`, [runId]);
             await timed("index", () => indexProject(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [], {skipDocuments: true}));
+            await db.query(`update "Phase2EditRun" set "currentStage"='snapshot',progress=96 where id=$1`, [runId]);
+            const publishedRevision: any = await timed("snapshot", () => createRequirementRevision(db, {
+                projectId: row.projectId, workspace: row.workspacePath, kind: "PUBLISHED", userId: row.userId,
+                editRunId: runId, sourceRevision: row.expectedRevision, resultRevision: applied.revision || row.savedRevision
+            }));
+            publishedRevisionId = publishedRevision.revisionId || "";
             const client = await db.connect();
             try {
                 await client.query("begin");
@@ -154,7 +170,11 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             try {
-                if (backupPath) await restore(row.workspacePath, backupPath)
+                if (publishedRevisionId) await removeRequirementRevision(db, publishedRevisionId);
+                if (backupPath) {
+                    await restorePhase2Edit(row.workspacePath, backupPath);
+                    await indexProject(db, row.projectId, row.workspacePath, [], {skipDocuments: true})
+                }
                 await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
                 const detail = editSaved ? `${message}（编辑稿已保存，继续使用上一发布版本）` : `${message}（修改未保存，上一发布版本未受影响）`;
                 await db.query(`update "Phase2EditRun" set status='FAILED',"currentStage"='publish_failed',"errorMessage"=$1,"finishedAt"=now() where id=$2`, [detail, runId])

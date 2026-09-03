@@ -56,7 +56,7 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
             ]
         });
         expect(references.slice(0, 3).map(item => item.document_id)).toEqual([
-            "GJB/Z 141-2004", "QJ 3027A-2016", "Q/QJA 300-2014"
+            "TE-GTCG-003-2021", "QJ 3027A-2016", "Q/QJA 300-2014"
         ]);
         expect(references.map(item => item.document_id).slice(7)).toEqual([
             "Q/W 1139-2007", "Q/W-Q80-18-01-2014", "Q/W 1141-2007", "RX03"
@@ -184,4 +184,22 @@ describe("hardware interface anchors", () => {
             businessId: "hardware-topic"
         }));
     });
+});
+
+describe("non-functional requirement editor contracts", () => {
+    it("provides controlled performance related-description options", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-performance-options-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        await writeFile(path.join(dataDir, "performance-test-content.json"), JSON.stringify({
+            section_title_no: "4.2.1", section_title: "性能需求项[TR-XN]", rows: []
+        }));
+        const document = await buildPhase2Document(workspace, [
+            {id: "performance-root", businessId: "performance-root", artifact: "performance-test-content.json", number: "4.2", parentId: null},
+            {id: "performance-section", businessId: "performance-section", artifact: "performance-test-content.json", number: "4.2.1", parentId: "performance-root"},
+        ]);
+        const action = document.chapters.flatMap(chapter => chapter.blocks).find(block => block.type === "requirement_actions");
+        expect(action?.requirementBinding?.related_description_options).toContain("时间间隔");
+        expect(action?.requirementBinding?.related_description_options).toContain("隐含需求：响应时间")
+    })
 });

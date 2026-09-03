@@ -18,6 +18,7 @@ type Paragraph = { text: string; paraId?: string; index: number };
 type RequirementDraft = {
     id: string;
     businessId: string;
+    entityUid?: string;
     nodeType: string;
     number?: string;
     title: string;
@@ -28,7 +29,7 @@ type RequirementDraft = {
     content: Json;
     sourceRefs: string[]
 };
-type PreviousRequirementNode = {id: string; businessId: string; reviewCount: number | string};
+type PreviousRequirementNode = {id: string; businessId: string; entityUid?: string; reviewCount: number | string};
 export type ReviewNodeMigrationPlan = {
     updates: Array<{businessId: string; nextBusinessId: string; previousId: string; nextId: string}>;
     unmatched: PreviousRequirementNode[];
@@ -332,14 +333,20 @@ async function indexRequirements(db: Db, projectId: string, workspace: string, r
         }
     }
     validateRequirementDrafts(projectId, drafts);
-    const previousNodes = await db.query(`select n.id,n."businessId",count(r.id)::int as "reviewCount"
+    const previousNodes = await db.query(`select n.id,n."businessId",n."entityUid",count(r.id)::int as "reviewCount"
         from "TestRequirementNode" n left join "Review" r on r."projectId"=n."projectId" and r."nodeId"=n.id
-        where n."projectId"=$1 group by n.id,n."businessId"`, [projectId]);
+        where n."projectId"=$1 group by n.id,n."businessId",n."entityUid"`, [projectId]);
     const migrationPlan = planReviewNodeMigrations(previousNodes.rows, drafts, renames);
+    const previousUid = new Map(previousNodes.rows.map(item => [item.businessId, item.entityUid || item.id]));
+    for (const rename of renames) {
+        const uid = previousUid.get(rename.from);
+        if (uid) previousUid.set(rename.to, uid)
+    }
+    for (const item of drafts) item.entityUid = previousUid.get(item.businessId) || projectScopedStableId("tre", projectId, item.businessId);
     await db.query('delete from "TestRequirementNode" where "projectId"=$1', [projectId]);
     for (const item of drafts) {
         try {
-            await db.query('insert into "TestRequirementNode" (id,"projectId","businessId","nodeType",number,title,level,"parentId","orderIndex",artifact,content,"sourceRefs") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [item.id, projectId, item.businessId, item.nodeType, item.number, item.title, item.level, item.parentId || null, item.order, item.artifact, JSON.stringify(item.content), JSON.stringify(item.sourceRefs)])
+            await db.query('insert into "TestRequirementNode" (id,"projectId","businessId","entityUid","nodeType",number,title,level,"parentId","orderIndex",artifact,content,"sourceRefs") values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [item.id, projectId, item.businessId, item.entityUid, item.nodeType, item.number, item.title, item.level, item.parentId || null, item.order, item.artifact, JSON.stringify(item.content), JSON.stringify(item.sourceRefs)])
         } catch (error) {
             throw new Error(`写入项目 ${projectId} 的测试需求节点失败：artifact=${item.artifact}, businessId=${item.businessId}, id=${item.id}`, {cause: error})
         }

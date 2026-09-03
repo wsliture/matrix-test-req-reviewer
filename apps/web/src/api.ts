@@ -176,6 +176,7 @@ export type DocumentNode = {
 export type RequirementNode = {
     id: string;
     businessId: string;
+    entityUid?: string;
     nodeType: string;
     number?: string;
     title: string;
@@ -224,8 +225,8 @@ export type Phase2Block = {
     requirementKey?: string;
     rowRequirementKeys?: string[]
 };
-export type Phase2EditBinding = {edit_key: string; node_id: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]};
-export type Phase2RequirementBinding = {container_key: string; allow_add: boolean; prefix: string; mode: "functional" | "non_functional" | "interface"; interface_label?: string};
+export type Phase2EditBinding = {edit_key: string; node_id: string; field?: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]; options?: string[]};
+export type Phase2RequirementBinding = {container_key: string; allow_add: boolean; prefix: string; mode: "functional" | "non_functional" | "interface"; interface_label?: string; related_description_options?: string[]};
 export type Phase2TableBinding = {container_key: string; allow_add_row: boolean; allow_delete_row: boolean; allow_add_column: boolean; allow_delete_column: boolean; row_keys: string[]; column_keys: string[]; new_row_columns?: string[]};
 export type Phase2AddedColumnDraft = {title: string; values: string[]};
 export type Phase2TableOperation = {container_key: string; operation: "add_row" | "delete_row" | "add_column" | "delete_column"; row_key?: string; column_key?: string; initial_value?: string | string[] | Record<string, string> | Phase2AddedColumnDraft; draft_key?: string};
@@ -282,3 +283,20 @@ export type Phase2EditRun = {id: string; status: string; progress: number; curre
     savedAt?: string; savedRevision?: string; publishedAt?: string; publicationStatus?: "QUEUED" | "BUILDING" | "PUBLISHED" | "FAILED";
     stageTimings?: Record<string, {startedAt: string; finishedAt: string; durationMs: number}>; startedAt?: string; finishedAt?: string};
 export type Phase2InlineDescriptor = {revision: string; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};
+export type RequirementRevision = {id: string; sequence: number; versionLabel: string;
+    kind: "GENERATED_BASELINE" | "MIGRATED_BASELINE" | "PUBLISHED"; parentRevisionId?: string; baselineRevisionId?: string;
+    editRunId?: string; changeSummary?: Record<string, number>; createdAt: string; publishedAt?: string};
+export type RequirementChange = {entityUid: string; type: "ADDED" | "DELETED" | "MODIFIED" | "MOVED" | "RENUMBERED" | "TRACE_CHANGED" | "TABLE_CHANGED";
+    before?: RequirementNode; after?: RequirementNode; fields?: {field: string; before: unknown; after: unknown}[];
+    chapterNumber?: string; parentAnchor?: string; beforeAnchorKey?: string; afterAnchorKey?: string;
+    beforeLocation?: {artifact: string; number?: string; title?: string; parentId?: string}; afterLocation?: {artifact: string; number?: string; title?: string; parentId?: string};
+    changedFields?: string[]; textSegments?: {type: "EQUAL" | "DELETE" | "INSERT"; text: string}[];
+    beforeSnapshot?: RequirementNode; afterSnapshot?: RequirementNode; beforeText?: string; afterText?: string;
+    leafChanges?: {path: string; before: unknown; after: unknown}[];
+    tableChanges?: {path: string; addedColumns: {index: number; value: unknown}[]; deletedColumns: {index: number; value: unknown}[];
+        addedRows: {index: number; value: unknown}[]; deletedRows: {index: number; value: unknown}[]}[]};
+export type RequirementDiffAnnotation = {entityUid: string; nodeId?: string; businessId?: string; type: RequirementChange["type"];
+    nodeType?: string; side: "before" | "after"; segments?: RequirementChange["textSegments"]; changedFields?: string[];
+    changedValues?: string[]; leafChanges?: RequirementChange["leafChanges"]; tableChanges?: RequirementChange["tableChanges"]};
+export type RequirementDiff = {from: RequirementRevision; to: RequirementRevision; algorithmVersion: string;
+    summary: Record<string, number>; changes: RequirementChange[]; warnings: string[]};

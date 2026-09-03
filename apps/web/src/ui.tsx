@@ -34,6 +34,7 @@ import {
 import {
     ArrowLeftOutlined,
     CheckCircleFilled,
+    ClockCircleOutlined,
     CloseOutlined,
     CloseCircleFilled,
     DeleteOutlined,
@@ -50,6 +51,9 @@ import {
     StopOutlined
 } from "@ant-design/icons";
 import {Navigate, Route, Routes, useNavigate, useParams} from "react-router-dom";
+import {RequirementDiffPage} from "./RequirementDiff";
+import {SortableTableList} from "./SortableTableList";
+import {readPhase2Draft, removePhase2Draft, writePhase2Draft} from "./phase2Draft";
 import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {
     api,
@@ -353,6 +357,7 @@ const STAGE_NAMES: Record<string, string> = {
     apply: "保存编辑稿",
     saved: "编辑稿已保存",
     resume_publish: "重新发布已保存编辑稿",
+    retry_apply: "重新应用保留的编辑内容",
     index: "更新测试需求索引",
     publish_failed: "发布失败",
     discover_documents: "识别源文档",
@@ -643,7 +648,7 @@ function treeOf<T extends {
 
 function Review() {
     const [reviewMessage, reviewMessageContext] = message.useMessage();
-    const {id = ""} = useParams(),
+    const {id = ""} = useParams(), navigate = useNavigate(),
         qc = useQueryClient(), [documentId, setDocumentId] = useState<string>(), [evalOpen, setEvalOpen] = useState(false),
         [evaluationTargetId, setEvaluationTargetId] = useState<string>(), [scores, setScores] = useState<ReviewScores>({
             correctness: 4,
@@ -683,8 +688,39 @@ function Review() {
     const [tableOperations, setTableOperations] = useState<Phase2TableOperation[]>([]);
     const [requirementOperations, setRequirementOperations] = useState<Phase2RequirementOperation[]>([]);
     const [editRunId, setEditRunId] = useState<string>();
+    const [draftExpectedRevision, setDraftExpectedRevision] = useState<string>();
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
     const currentUser = qc.getQueryData<CurrentUser>(["me"]);
+    const inlineEditor = useQuery({queryKey: ["phase2-editor-inline", id],
+        queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`),
+        staleTime: Infinity, gcTime: 30 * 60_000});
+    const [draftHydratedScope, setDraftHydratedScope] = useState("");
+    const draftScope = currentUser ? `${id}:${currentUser.id}` : "";
+    useEffect(() => {
+        if (!currentUser || !id) return;
+        const restored = readPhase2Draft(id, currentUser.id);
+        if (restored) {
+            setEditorDrafts(restored.editorDrafts);
+            setTableOperations(restored.tableOperations);
+            setRequirementOperations(restored.requirementOperations);
+            setEditRunId(restored.editRunId);
+            setDraftExpectedRevision(restored.expectedRevision);
+            setDocumentEditing(true)
+        }
+        setDraftHydratedScope(draftScope)
+    }, [draftScope]);
+    useEffect(() => {
+        if (draftHydratedScope !== draftScope || !currentUser || !documentEditing) return;
+        const hasChanges = Object.keys(editorDrafts).length > 0 || tableOperations.length > 0 || requirementOperations.length > 0;
+        if (!hasChanges && !editRunId) return;
+        writePhase2Draft({version: 1, projectId: id, userId: currentUser.id, editorDrafts, tableOperations, requirementOperations,
+            expectedRevision: draftExpectedRevision || inlineEditor.data?.revision, editRunId})
+    }, [documentEditing, draftHydratedScope, draftScope, currentUser?.id, id, editorDrafts, tableOperations, requirementOperations, editRunId, draftExpectedRevision, inlineEditor.data?.revision]);
+    const clearEditingDraft = useCallback(() => {
+        if (currentUser) removePhase2Draft(id, currentUser.id);
+        setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]);
+        setSourceEditBinding(undefined); setTableEditBinding(undefined); setEditRunId(undefined); setDraftExpectedRevision(undefined)
+    }, [currentUser?.id, id]);
     const outboxKey = currentUser ? editTimeOutboxKey(id, currentUser.id) : "";
     const [pendingEditDurationMs, setPendingEditDurationMs] = useState(0);
     const [activeEditDurationMs, setActiveEditDurationMs] = useState(0);
@@ -754,9 +790,6 @@ function Review() {
         window.addEventListener("beforeunload", warnAboutUnsubmittedForm);
         return () => window.removeEventListener("beforeunload", warnAboutUnsubmittedForm)
     }, [documentEditing]);
-    const inlineEditor = useQuery({queryKey: ["phase2-editor-inline", id],
-        queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`),
-        staleTime: Infinity, gcTime: 30 * 60_000});
     const editRun = useQuery({queryKey: ["phase2-edit-run", editRunId],
         queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
         refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
@@ -765,16 +798,26 @@ function Review() {
         if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
         acknowledgedSavedRun.current = editRun.data.id;
         stopEditActivity();
-        setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]);
-        setSourceEditBinding(undefined); setTableEditBinding(undefined);
-        void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
         message.success("修改已保存，测试需求文档正在后台发布")
-    }, [editRun.data?.savedAt, editRun.data?.id, id, qc, stopEditActivity]);
-    useEffect(() => { if (editRun.data?.status === "SUCCEEDED") {
-        void qc.invalidateQueries({queryKey: ["review-data", id]}); void qc.invalidateQueries({queryKey: ["reviews", id]})
-    } }, [editRun.data?.status, id, qc]);
+    }, [editRun.data?.savedAt, editRun.data?.id, stopEditActivity]);
+    useEffect(() => {
+        if (editRun.data?.status === "SUCCEEDED") {
+            stopEditActivity();
+            clearEditingDraft();
+            void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
+            void qc.invalidateQueries({queryKey: ["review-data", id]});
+            void qc.invalidateQueries({queryKey: ["reviews", id]});
+            message.success("修改已发布")
+        } else if (editRun.data?.status === "FAILED") {
+            stopEditActivity();
+            setDocumentEditing(true);
+            setSourceEditBinding(undefined); setTableEditBinding(undefined);
+            void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
+            void qc.invalidateQueries({queryKey: ["project", id]})
+        }
+    }, [editRun.data?.status, id, qc, stopEditActivity, clearEditingDraft]);
     const saveInlineEdit = useMutation({mutationFn: () => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
-        method: "POST", body: JSON.stringify({expected_revision: inlineEditor.data?.revision,
+        method: "POST", body: JSON.stringify({expected_revision: draftExpectedRevision || inlineEditor.data?.revision,
             changes: Object.entries(editorDrafts).map(([edit_key, value]) => ({edit_key, value})),
             table_operations: tableOperations.map(({draft_key: _draftKey, ...operation}) => operation),
             requirement_operations: requirementOperations.map(({draft_key: _draftKey, ...operation}) => operation)})
@@ -1058,7 +1101,7 @@ function Review() {
                 if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
             }
             return [...current, operation]
-        }) }} readOnly={rebuilding}/></main>;
+        }) }} onEditActivityEnd={stopEditActivity} readOnly={rebuilding}/></main>;
     const persist = (name: string, setter: (sizes: SplitSizes) => void, threshold: number, bothSides: boolean) => (sizes: number[]) => {
         const next = snappedSizes(sizes, threshold, bothSides);
         setter(next);
@@ -1151,20 +1194,34 @@ function Review() {
     }) };
     const displayedMyEditDuration = (editTime.data?.myDurationMs || 0) + pendingEditDurationMs + activeEditDurationMs;
     const displayedProjectEditDuration = (editTime.data?.projectDurationMs || 0) + pendingEditDurationMs + activeEditDurationMs;
+    const compactEditDuration = (durationMs: number) => {
+        const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
+        const hours = Math.floor(totalSeconds / 3600), minutes = Math.floor(totalSeconds % 3600 / 60), seconds = totalSeconds % 60;
+        return hours ? `${hours}小时${minutes}分` : minutes ? `${minutes}分${seconds}秒` : `${seconds}秒`
+    };
+    const editTimeDetails = <div className="edit-time-popover">
+        <b>编辑用时</b>
+        <div><span>我的编辑用时</span><strong>{formatEditDuration(displayedMyEditDuration)}</strong></div>
+        <div><span>项目总编辑用时</span><strong>{formatEditDuration(displayedProjectEditDuration)}</strong></div>
+        <small>仅统计文档编辑状态下的有效操作时间</small>
+    </div>;
     const exportActions = <Space>
-        <span className="edit-time-summary" title="输入、选择和结构编辑的累计人工用时">
-            我的编辑用时：{formatEditDuration(displayedMyEditDuration)} · 项目总编辑用时：{formatEditDuration(displayedProjectEditDuration)}
-        </span>
+        <Popover content={editTimeDetails} trigger={["hover", "click"]} placement="bottomRight">
+            <button type="button" className="edit-time-summary" aria-label="查看编辑用时详情">
+                <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
+            </button>
+        </Popover>
         {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={rebuilding || inlineEditor.isLoading}
             loading={inlineEditor.isLoading}
-            onClick={() => { setEditorDrafts({}); setDocumentEditing(true) }}>编辑文档</Button> : <>
-            <Button ghost disabled={rebuilding} onClick={() => { stopEditActivity(); setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setSourceEditBinding(undefined); setTableEditBinding(undefined) }}>放弃修改</Button>
+            onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision); setDocumentEditing(true) }}>编辑文档</Button> : <>
+            <Button ghost disabled={rebuilding} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
-                disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading}
+                disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading || inlineEditor.isFetching}
                 onClick={() => { stopEditActivity(); saveInlineEdit.mutate() }}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
         </>}
         <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
+        <Button ghost onClick={() => navigate(`/projects/${id}/requirement-diff`)}>变更分析</Button>
         <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
                 icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={rebuilding}
                 onClick={() => {
@@ -1241,8 +1298,20 @@ function Review() {
             }} okText="确定" cancelText="取消">
             <div className="phase2-picker-selected">
                 <div className="phase2-picker-section-title">已选择 {tableModalValues.length} 张</div>
-                <div className="phase2-picker-tags">{tableModalValues.length ? tableModalValues.map(value => <Tag closable key={value}
-                    onClose={event => { event.preventDefault(); recordEditActivity(); setTableModalValues(current => current.filter(item => item !== value)) }}>{tableLabel(value)}</Tag>) :
+                <div className="phase2-picker-tags phase2-selected-table-list">{tableModalValues.length ? <SortableTableList ids={tableModalValues}
+                    onChange={values => { recordEditActivity(); setTableModalValues(values) }}>
+                    {value => {
+                        const option = tableOptionMap.get(value);
+                        return <div className="phase2-selected-table-entry">
+                            <div className="phase2-selected-table-meta">
+                                <b>{option ? tableDocumentName(option.document_name) : "引用表格不可用"}</b>
+                                <span>{option ? `${option.section_number || option.section_title} · ${option.title}` : value}</span>
+                            </div>
+                            <Button type="text" danger icon={<CloseOutlined/>} aria-label="移除引用表格"
+                                onClick={() => { recordEditActivity(); setTableModalValues(current => current.filter(item => item !== value)) }}/>
+                        </div>
+                    }}
+                </SortableTableList> :
                     <span className="phase2-picker-empty-inline">尚未选择引用表格</span>}</div>
             </div>
             <Input allowClear className="phase2-picker-search" placeholder="搜索文件名、章节号、章节标题或表题" value={tablePickerSearch}
@@ -1291,7 +1360,7 @@ function Review() {
                 <span>当前阶段：{editRun.data?.currentStage ? stageName(editRun.data.currentStage) : "排队中"}</span>
             </>}
         />}
-        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="文档发布失败，继续使用上一发布版本"
+        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="文档发布失败，编辑内容已保留"
             description={editRun.data.errorMessage}
             action={<Button size="small" loading={retryPublication.isPending} onClick={() => retryPublication.mutate()}>
                 重试发布
@@ -1406,5 +1475,6 @@ export function App() {
         message="正在恢复登录状态"/>}<Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/></Routes></>
+        path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/><Route
+        path="/projects/:id/requirement-diff" element={me.data ? <RequirementDiffPage/> : <Navigate to="/login"/>}/></Routes></>
 }

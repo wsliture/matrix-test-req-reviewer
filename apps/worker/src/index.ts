@@ -8,6 +8,7 @@ import path from "node:path";
 import {missingCompletionStages, parseToolOutput, progressOf} from "./progress.js";
 import {indexProject} from "./indexing.js";
 import {startPhase2EditWorker} from "./phase2-edit.js";
+import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null}),
     db = new Pool({connectionString: process.env.DATABASE_URL}),
@@ -175,6 +176,7 @@ new Worker("phase2", async job => {
     const runId = String(job.data.runId), p = await project(runId),
         completed = new Set<string>(Array.isArray(p.completedStages) ? p.completedStages.map(String) : []),
         abort = new AbortController();
+    let generatedBaselineId = "";
     if (!await claim(runId)) return {cancelled: true};
     await event(runId, "run.started", {projectId: p.id});
     try {
@@ -206,12 +208,15 @@ new Worker("phase2", async job => {
         await verify(p.workspacePath);
         if (await cancelled(runId)) return {cancelled: true};
         await indexProject(db, p.id, p.workspacePath);
+        const baseline: any = await createRequirementRevision(db, {projectId: p.id, workspace: p.workspacePath, kind: "GENERATED_BASELINE"});
+        generatedBaselineId = baseline.revisionId || "";
         await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed});
         await db.query('update "Project" set status=$1,"missingArtifacts"=$2,"updatedAt"=now() where id=$3', ["READY_FOR_REVIEW", JSON.stringify([]), p.id]);
         await event(runId, "run.succeeded", {});
         return {ok: true}
     } catch (error) {
         abort.abort();
+        if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
         if (await cancelled(runId)) return {cancelled: true};
         const message = error instanceof Error ? error.message : String(error);
         await update(runId, {status: "FAILED", error: message, completed});

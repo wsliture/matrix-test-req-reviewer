@@ -37,6 +37,7 @@ model User {
   reviews Review[]
   phase2EditRuns Phase2EditRun[]
   editTimeSegments EditTimeSegment[]
+  requirementRevisions RequirementRevision[]
   createdAt DateTime @default(now())
 }
 model RefreshToken {
@@ -61,6 +62,8 @@ model Project {
   editRuns Phase2EditRun[]
   reviews Review[]
   editTimeSegments EditTimeSegment[]
+  requirementRevisions RequirementRevision[]
+  requirementChangeSets RequirementChangeSet[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -87,6 +90,7 @@ model Phase2EditRun {
   createdAt DateTime @default(now())
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
   user User @relation(fields:[userId], references:[id])
+  revision RequirementRevision?
   @@index([projectId,status])
 }
 model Document {
@@ -127,6 +131,7 @@ model TestRequirementNode {
   id String @id @default(cuid())
   projectId String
   businessId String
+  entityUid String
   nodeType String
   number String?
   title String
@@ -141,6 +146,7 @@ model TestRequirementNode {
   children TestRequirementNode[] @relation("TestRequirementTree")
   incomingLinks TraceLink[]
   @@unique([projectId,businessId])
+  @@index([projectId,entityUid])
   @@index([projectId,parentId,orderIndex])
 }
 model TraceLink {
@@ -187,6 +193,10 @@ model Review {
   projectId String
   reviewerId String
   nodeId String
+  entityUid String?
+  revisionId String?
+  invalidatedAt DateTime?
+  invalidatedByRevisionId String?
   version Int @default(1)
   scores Json
   weightedScore Float
@@ -195,8 +205,72 @@ model Review {
   comment String?
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
   reviewer User @relation(fields:[reviewerId], references:[id])
+  revision RequirementRevision? @relation(fields:[revisionId], references:[id], onDelete:SetNull)
   createdAt DateTime @default(now())
   @@unique([projectId,nodeId,version])
+}
+
+enum RequirementRevisionKind {
+  GENERATED_BASELINE
+  MIGRATED_BASELINE
+  PUBLISHED
+}
+
+enum RequirementRevisionStatus {
+  BUILDING
+  PUBLISHED
+  FAILED
+  CORRUPTED
+}
+
+model RequirementRevision {
+  id String @id
+  projectId String
+  sequence Int
+  versionLabel String
+  kind RequirementRevisionKind
+  status RequirementRevisionStatus @default(BUILDING)
+  parentRevisionId String?
+  baselineRevisionId String?
+  editRunId String? @unique
+  storagePath String
+  manifestHash String
+  sourceRevision String?
+  resultRevision String?
+  changeSummary Json?
+  createdById String?
+  createdAt DateTime @default(now())
+  publishedAt DateTime?
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  createdBy User? @relation(fields:[createdById], references:[id], onDelete:SetNull)
+  editRun Phase2EditRun? @relation(fields:[editRunId], references:[id], onDelete:SetNull)
+  parentRevision RequirementRevision? @relation("RevisionParents", fields:[parentRevisionId], references:[id], onDelete:SetNull)
+  children RequirementRevision[] @relation("RevisionParents")
+  baselineRevision RequirementRevision? @relation("RevisionBaselines", fields:[baselineRevisionId], references:[id], onDelete:SetNull)
+  baselineChildren RequirementRevision[] @relation("RevisionBaselines")
+  reviews Review[]
+  fromChangeSets RequirementChangeSet[] @relation("ChangeSetFrom")
+  toChangeSets RequirementChangeSet[] @relation("ChangeSetTo")
+  @@unique([projectId,sequence])
+  @@index([projectId,status])
+}
+
+model RequirementChangeSet {
+  id String @id
+  projectId String
+  fromRevisionId String
+  toRevisionId String
+  algorithmVersion String
+  status String @default("READY")
+  summary Json
+  changes Json
+  warnings Json?
+  createdAt DateTime @default(now())
+  project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
+  fromRevision RequirementRevision @relation("ChangeSetFrom", fields:[fromRevisionId], references:[id], onDelete:Cascade)
+  toRevision RequirementRevision @relation("ChangeSetTo", fields:[toRevisionId], references:[id], onDelete:Cascade)
+  @@unique([fromRevisionId,toRevisionId,algorithmVersion])
+  @@index([projectId,createdAt])
 }
 model EditTimeSegment {
   id String @id

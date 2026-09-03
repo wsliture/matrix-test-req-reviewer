@@ -26,10 +26,10 @@ ARM64 离线包需包含 Matrix 的 `dist/index.js` 和 `dist/direct-phase2-runn
 每次编辑前，worker 将 `.matrix/data` 和 `.matrix/reports` 备份到：
 
 ```text
-.matrix/history/phase2-edits/<runId>/
+.matrix/history/rollback/<runId>/
 ```
 
-重建失败时恢复文件并重新建立数据库索引。成功前项目状态为 `REBUILDING`，界面禁止再次编辑、评审和下载。TR 删除仅从当前索引移除，历史 Review/AuditLog 不物理删除；编号写入 tombstone，后续不复用。
+重建失败时恢复文件并重新建立数据库索引。成功发布的不可变版本保存到 `.matrix/history/revisions/<revisionId>/`。成功前项目状态为 `REBUILDING`，界面禁止再次编辑、评审和下载。TR 删除仅从当前索引移除，历史 Review/AuditLog 不物理删除；编号写入 tombstone，后续不复用。
 
 ## 故障排查
 

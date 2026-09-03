@@ -1,6 +1,7 @@
 import {BadRequestException, ConflictException, Controller, ForbiddenException, Get, Injectable, Param, Post, Req, Body} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
+import {Prisma} from "@prisma/client";
 import {PrismaService} from "./prisma.js";
 
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null});
@@ -130,11 +131,12 @@ export class Phase2EditsService {
         const active = await this.db.phase2EditRun.findFirst({where: {projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}}});
         if (active) throw new ConflictException("该项目已有编辑重建任务");
         await this.db.$transaction([
-            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "resume_publish", progress: 15, errorMessage: null, finishedAt: null}}),
+            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "retry_apply", progress: 0,
+                errorMessage: null, finishedAt: null, savedAt: null, savedRevision: null, applyResult: Prisma.JsonNull, publishedAt: null}}),
             this.db.project.update({where: {id: run.projectId}, data: {status: "REBUILDING"}})
         ]);
-        await queue.add("phase2-edit-retry", {editRunId: id, rebuildOnly: true}, {jobId: `${id}-retry-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
-        return {...await this.db.phase2EditRun.findUniqueOrThrow({where: {id}}), publicationStatus: "BUILDING" as const}
+        await queue.add("phase2-edit-retry", {editRunId: id, rebuildOnly: false}, {jobId: `${id}-retry-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
+        return {...await this.db.phase2EditRun.findUniqueOrThrow({where: {id}}), publicationStatus: "QUEUED" as const}
     }
 }
 

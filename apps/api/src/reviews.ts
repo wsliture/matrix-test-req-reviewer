@@ -22,7 +22,7 @@ export class ReviewsController {
     }
 
     @Get() list(@Param("projectId") projectId: string) {
-        return this.db.review.findMany({where: {projectId}, orderBy: {createdAt: "desc"}})
+        return this.db.review.findMany({where: {projectId, invalidatedAt: null}, orderBy: {createdAt: "desc"}})
     }
 
     @Post() async save(@Param("projectId") projectId: string, @Req() req: any, @Body() body: {
@@ -35,6 +35,11 @@ export class ReviewsController {
         if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能评审");
         if (!body.nodeId?.trim()) throw new BadRequestException("评估节点不能为空");
         validateReview(body.scores, body.comment);
+        const [node, revision] = await Promise.all([
+            this.db.testRequirementNode.findFirst({where: {projectId, id: body.nodeId}}),
+            this.db.requirementRevision.findFirst({where: {projectId, status: "PUBLISHED"}, orderBy: {sequence: "desc"}})
+        ]);
+        if (!node) throw new BadRequestException("评估节点不存在");
         const reviewerId = req.user.id,
             weighted = calculateReviewScore(body.scores),
             grade = weighted >= 4.5 ? "优秀" : weighted >= 3.5 ? "良好" : weighted >= 2.5 ? "合格" : "不合格",
@@ -47,6 +52,8 @@ export class ReviewsController {
                 projectId,
                 reviewerId,
                 nodeId: body.nodeId,
+                entityUid: node.entityUid,
+                revisionId: revision?.id,
                 version: (latest?.version || 0) + 1,
                 scores: body.scores,
                 weightedScore: weighted,
