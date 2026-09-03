@@ -13,7 +13,7 @@ export type Phase2RequirementBinding = {
 };
 export type Phase2TextPart = {text: string; editable?: false} | {text: string; editable: true; binding: Phase2EditBinding};
 export type Phase2Block = {
-    type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "error";
+    type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "reference_list" | "error";
     text?: string;
     level?: number;
     anchorId?: string;
@@ -41,6 +41,8 @@ export type Phase2Block = {
     requirementBinding?: Phase2RequirementBinding;
     requirementKey?: string;
     rowRequirementKeys?: string[];
+    references?: {document_id: string; document_title: string; management: "fixed" | "automatic" | "project"}[];
+    referenceBinding?: {container_key: string; node_id?: string};
 };
 export type Phase2Chapter = {
     artifact: string;
@@ -109,18 +111,21 @@ const table = (caption: string, columns: string[], rows: unknown[][]): Phase2Blo
 });
 const alpha = (index: number) => String.fromCharCode(97 + index);
 
-export function chapter1DisplayReferences(data: Json): {document_id: string; document_title: string}[] {
+export function chapter1DisplayReferences(data: Json): {document_id: string; document_title: string; management: "fixed" | "automatic" | "project"}[] {
     const programming = list(data.programming_languages)
         .map(language => PROGRAMMING_LANGUAGE_REFERENCES[language])
         .filter((item): item is {document_id: string; document_title: string} => Boolean(item));
     const artifactReferences = Array.isArray(data.references) ? data.references : [];
     const seen = new Set<string>();
-    return [...BASE_CHAPTER1_REFERENCES, ...programming, ...artifactReferences].filter((item: Json) => {
+    return [...BASE_CHAPTER1_REFERENCES.map(item => ({...item, management: "fixed" as const})),
+        ...programming.map(item => ({...item, management: "automatic" as const})),
+        ...artifactReferences.map((item: Json) => ({...item, management: ["programming_language", "conditional"].includes(text(item.source_kind)) ? "automatic" as const : "project" as const}))].filter((item: Json) => {
         const key = text(item.document_id).toUpperCase();
         if (!key || seen.has(key)) return false;
         seen.add(key);
         return true
-    }).map((item: Json) => ({document_id: text(item.document_id), document_title: text(item.document_title)}))
+    }).map((item: Json) => ({document_id: text(item.document_id), document_title: text(item.document_title), management: item.management as "fixed" | "automatic" | "project"}))
+        .sort((left, right) => ({fixed: 0, automatic: 1, project: 2}[left.management] - {fixed: 0, automatic: 1, project: 2}[right.management]))
 }
 
 export function formatChapter2Processor(processorType: unknown, processorFrequency: unknown): string {
@@ -176,12 +181,8 @@ function chapter1(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
         richParagraph([{text: "d. 委托单位地址："}, editablePart(data.client_address, rootBinding("client_address", data.client_address)), {text: "；"}]), paragraph("e. 缩略语："), paragraph("CSCI：计算机软件配置项；"), paragraph("TR：测试需求；"), paragraph("IF：接口。"),
         paragraph("f. 本文档适用的系统和计算机软件配置项（CSCI）："), richParagraph([{text: "本文档适用的系统是"}, editablePart(data.system_name, rootBinding("system_name", data.system_name)), {text: "，对应的软件配置项为"}, editablePart(csci, rootBinding("csci_names", data.csci_names, "list_item")), {text: "。"}]),
         heading("1.2 文档概述", 2), richParagraph([{text: "本文是"}, editablePart(data.software_name_and_id, rootBinding("software_name_and_id", data.software_name_and_id)), {text: "的第三方测试需求，文中描述了该软件的测试范围，定义软件测试项及测试要求，为后续用例设计提供测试依据。本文档适用的代码版本为V"}, editablePart(data.code_version, rootBinding("code_version", data.code_version)), {text: "。"}]),
-        heading("1.3 依据文件和引用文档", 2), ...references.map((item: Json) => {
-            const index = (data.references || []).findIndex((candidate: Json) => text(candidate.document_id).toUpperCase() === text(item.document_id).toUpperCase());
-            return index < 0 ? paragraph(`${text(item.document_id)}    ${text(item.document_title)}`) : richParagraph([
-                editablePart(item.document_id, rootBinding(`references.${index}.document_id`, item.document_id)), {text: "    "},
-                editablePart(item.document_title, rootBinding(`references.${index}.document_title`, item.document_title))])
-        }),
+        heading("1.3 依据文件和引用文档", 2), {type: "reference_list", references,
+            referenceBinding: {container_key: editKey({artifact, field: "references"}), node_id: root?.id}},
         heading("1.4 测试需求概述", 2), paragraph("依据委托方的要求，针对被测试软件，确定的测试级别为配置项测试，测试类型及其要求如下："),
         table("表1-1  测试类型总结表", ["序号", "测试类型标识", "测试类型"], TEST_TYPES.map((item, index) => [index + 1, ...item])),
         paragraph("注：ALL为固定符号，不需要改变；YYY为表明所描述需求项意义的符号，需要根据具体需求项进行更改；XXX为当前需求项序号；"),

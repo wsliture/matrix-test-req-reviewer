@@ -11,7 +11,7 @@ describe("phase2 local draft", () => {
 
     it("round trips a draft scoped to project and user", () => {
         const draft = {version: 1 as const, projectId: "p1", userId: "u1", editorDrafts: {field: "value"},
-            tableOperations: [], requirementOperations: [], expectedRevision: "r1", editRunId: "run1"};
+            tableOperations: [], requirementOperations: [], referenceOperations: [], expectedRevision: "r1", editRunId: "run1"};
         writePhase2Draft(draft);
         expect(readPhase2Draft("p1", "u1")).toEqual(draft);
         expect(readPhase2Draft("p1", "u2")).toBeUndefined()
@@ -22,7 +22,7 @@ describe("phase2 local draft", () => {
         data.set(key, "not-json");
         expect(readPhase2Draft("p1", "u1")).toBeUndefined();
         expect(data.has(key)).toBe(false);
-        writePhase2Draft({version: 1, projectId: "p1", userId: "u1", editorDrafts: {}, tableOperations: [], requirementOperations: []});
+        writePhase2Draft({version: 1, projectId: "p1", userId: "u1", editorDrafts: {}, tableOperations: [], requirementOperations: [], referenceOperations: []});
         removePhase2Draft("p1", "u1");
         expect(data.has(key)).toBe(false)
     })

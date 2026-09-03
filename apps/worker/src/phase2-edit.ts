@@ -46,7 +46,8 @@ const reportByArtifact: Record<string, string> = {
 export function requestedArtifacts(request: any) {
     const encoded = [...(request.changes || []).map((item: any) => item.edit_key),
         ...(request.table_operations || []).map((item: any) => item.container_key),
-        ...(request.requirement_operations || []).map((item: any) => item.container_key)];
+        ...(request.requirement_operations || []).map((item: any) => item.container_key),
+        ...(request.reference_operations || []).map((item: any) => item.container_key)];
     const artifacts = new Set<string>();
     for (const value of encoded) try {
         const key = JSON.parse(Buffer.from(String(value), "base64url").toString("utf8"));
@@ -152,7 +153,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             await db.query(`update "Phase2EditRun" set "currentStage"='snapshot',progress=96 where id=$1`, [runId]);
             const publishedRevision: any = await timed("snapshot", () => createRequirementRevision(db, {
                 projectId: row.projectId, workspace: row.workspacePath, kind: "PUBLISHED", userId: row.userId,
-                editRunId: runId, sourceRevision: row.expectedRevision, resultRevision: applied.revision || row.savedRevision
+                editRunId: runId, versionName: String(request.version_name || "").trim(), sourceRevision: row.expectedRevision, resultRevision: applied.revision || row.savedRevision
             }));
             publishedRevisionId = publishedRevision.revisionId || "";
             const client = await db.connect();

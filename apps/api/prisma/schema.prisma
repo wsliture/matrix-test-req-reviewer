@@ -228,6 +228,7 @@ model RequirementRevision {
   projectId String
   sequence Int
   versionLabel String
+  versionName String?
   kind RequirementRevisionKind
   status RequirementRevisionStatus @default(BUILDING)
   parentRevisionId String?

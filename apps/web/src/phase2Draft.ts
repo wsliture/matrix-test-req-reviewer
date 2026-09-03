@@ -1,4 +1,4 @@
-import type {Phase2RequirementOperation, Phase2TableOperation} from "./api";
+import type {Phase2ReferenceOperation, Phase2RequirementOperation, Phase2TableOperation} from "./api";
 
 export type Phase2LocalDraft = {
     version: 1;
@@ -7,6 +7,7 @@ export type Phase2LocalDraft = {
     editorDrafts: Record<string, unknown>;
     tableOperations: Phase2TableOperation[];
     requirementOperations: Phase2RequirementOperation[];
+    referenceOperations: Phase2ReferenceOperation[];
     expectedRevision?: string;
     editRunId?: string;
 };
@@ -19,11 +20,12 @@ export function readPhase2Draft(projectId: string, userId: string): Phase2LocalD
         const value = JSON.parse(localStorage.getItem(key) || "null") as Partial<Phase2LocalDraft> | null;
         if (!value || value.version !== 1 || value.projectId !== projectId || value.userId !== userId
             || !value.editorDrafts || typeof value.editorDrafts !== "object" || Array.isArray(value.editorDrafts)
-            || !Array.isArray(value.tableOperations) || !Array.isArray(value.requirementOperations)) {
+            || !Array.isArray(value.tableOperations) || !Array.isArray(value.requirementOperations)
+            || value.referenceOperations !== undefined && !Array.isArray(value.referenceOperations)) {
             if (value) localStorage.removeItem(key);
             return undefined
         }
-        return value as Phase2LocalDraft
+        return {...value, referenceOperations: value.referenceOperations || []} as Phase2LocalDraft
     } catch {
         localStorage.removeItem(key);
         return undefined

@@ -196,7 +196,7 @@ export type TraceLink = {
     targetNode: RequirementNode
 };
 export type Phase2Block = {
-    type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "error";
+    type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "reference_list" | "error";
     text?: string;
     level?: number;
     anchorId?: string;
@@ -224,6 +224,8 @@ export type Phase2Block = {
     requirementBinding?: Phase2RequirementBinding;
     requirementKey?: string;
     rowRequirementKeys?: string[]
+    references?: {document_id: string; document_title: string; management: "fixed" | "automatic" | "project"}[];
+    referenceBinding?: {container_key: string; node_id?: string}
 };
 export type Phase2EditBinding = {edit_key: string; node_id: string; field?: string; kind: "text" | "multiline" | "list_item" | "table_cell" | "table_header" | "source_refs" | "table_selection" | "requirement_id_suffix"; value: string | string[]; options?: string[]};
 export type Phase2RequirementBinding = {container_key: string; allow_add: boolean; prefix: string; mode: "functional" | "non_functional" | "interface"; interface_label?: string; related_description_options?: string[]};
@@ -231,6 +233,7 @@ export type Phase2TableBinding = {container_key: string; allow_add_row: boolean;
 export type Phase2AddedColumnDraft = {title: string; values: string[]};
 export type Phase2TableOperation = {container_key: string; operation: "add_row" | "delete_row" | "add_column" | "delete_column"; row_key?: string; column_key?: string; initial_value?: string | string[] | Record<string, string> | Phase2AddedColumnDraft; draft_key?: string};
 export type Phase2RequirementOperation = {container_key: string; operation: "add_requirement" | "delete_requirement"; requirement_key?: string; requested_suffix?: string; initial_value?: {content?: string; description?: string; related_description?: string; source_refs: string[]}; draft_key?: string};
+export type Phase2ReferenceOperation = {container_key: string; operation: "add_reference" | "update_reference" | "delete_reference"; reference_key?: string; initial_value?: {document_id: string; document_title: string}; draft_key?: string};
 export type Phase2TextPart = {text: string; editable?: false} | {text: string; editable: true; binding: Phase2EditBinding};
 export type Phase2Chapter = {
     artifact: string;
@@ -284,6 +287,7 @@ export type Phase2EditRun = {id: string; status: string; progress: number; curre
     stageTimings?: Record<string, {startedAt: string; finishedAt: string; durationMs: number}>; startedAt?: string; finishedAt?: string};
 export type Phase2InlineDescriptor = {revision: string; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};
 export type RequirementRevision = {id: string; sequence: number; versionLabel: string;
+    versionName?: string;
     kind: "GENERATED_BASELINE" | "MIGRATED_BASELINE" | "PUBLISHED"; parentRevisionId?: string; baselineRevisionId?: string;
     editRunId?: string; changeSummary?: Record<string, number>; createdAt: string; publishedAt?: string};
 export type RequirementChange = {entityUid: string; type: "ADDED" | "DELETED" | "MODIFIED" | "MOVED" | "RENUMBERED" | "TRACE_CHANGED" | "TABLE_CHANGED";

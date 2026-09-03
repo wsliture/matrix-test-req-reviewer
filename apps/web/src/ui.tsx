@@ -71,6 +71,7 @@ import {
     type Phase2EditBinding,
     type Phase2InlineDescriptor,
     type Phase2RequirementOperation,
+    type Phase2ReferenceOperation,
     type Phase2TableOperation,
     type Project,
     type ReviewData,
@@ -687,6 +688,10 @@ function Review() {
     const [tablePreviewId, setTablePreviewId] = useState<string>();
     const [tableOperations, setTableOperations] = useState<Phase2TableOperation[]>([]);
     const [requirementOperations, setRequirementOperations] = useState<Phase2RequirementOperation[]>([]);
+    const [referenceOperations, setReferenceOperations] = useState<Phase2ReferenceOperation[]>([]);
+    const [versionNameModalOpen, setVersionNameModalOpen] = useState(false);
+    const [versionName, setVersionName] = useState("");
+    const [submissionLocked, setSubmissionLocked] = useState(false);
     const [editRunId, setEditRunId] = useState<string>();
     const [draftExpectedRevision, setDraftExpectedRevision] = useState<string>();
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
@@ -703,6 +708,7 @@ function Review() {
             setEditorDrafts(restored.editorDrafts);
             setTableOperations(restored.tableOperations);
             setRequirementOperations(restored.requirementOperations);
+            setReferenceOperations(restored.referenceOperations);
             setEditRunId(restored.editRunId);
             setDraftExpectedRevision(restored.expectedRevision);
             setDocumentEditing(true)
@@ -711,14 +717,15 @@ function Review() {
     }, [draftScope]);
     useEffect(() => {
         if (draftHydratedScope !== draftScope || !currentUser || !documentEditing) return;
-        const hasChanges = Object.keys(editorDrafts).length > 0 || tableOperations.length > 0 || requirementOperations.length > 0;
+        const hasChanges = Object.keys(editorDrafts).length > 0 || tableOperations.length > 0 || requirementOperations.length > 0 || referenceOperations.length > 0;
         if (!hasChanges && !editRunId) return;
-        writePhase2Draft({version: 1, projectId: id, userId: currentUser.id, editorDrafts, tableOperations, requirementOperations,
+        writePhase2Draft({version: 1, projectId: id, userId: currentUser.id, editorDrafts, tableOperations, requirementOperations, referenceOperations,
             expectedRevision: draftExpectedRevision || inlineEditor.data?.revision, editRunId})
-    }, [documentEditing, draftHydratedScope, draftScope, currentUser?.id, id, editorDrafts, tableOperations, requirementOperations, editRunId, draftExpectedRevision, inlineEditor.data?.revision]);
+    }, [documentEditing, draftHydratedScope, draftScope, currentUser?.id, id, editorDrafts, tableOperations, requirementOperations, referenceOperations, editRunId, draftExpectedRevision, inlineEditor.data?.revision]);
     const clearEditingDraft = useCallback(() => {
         if (currentUser) removePhase2Draft(id, currentUser.id);
-        setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]);
+        setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setReferenceOperations([]);
+        setVersionNameModalOpen(false); setVersionName(""); setSubmissionLocked(false);
         setSourceEditBinding(undefined); setTableEditBinding(undefined); setEditRunId(undefined); setDraftExpectedRevision(undefined)
     }, [currentUser?.id, id]);
     const outboxKey = currentUser ? editTimeOutboxKey(id, currentUser.id) : "";
@@ -794,6 +801,7 @@ function Review() {
         queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
         refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
     const rebuilding = projectState.data?.status === "REBUILDING" || Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
+    const interactionLocked = submissionLocked || rebuilding;
     useEffect(() => {
         if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
         acknowledgedSavedRun.current = editRun.data.id;
@@ -810,20 +818,24 @@ function Review() {
             message.success("修改已发布")
         } else if (editRun.data?.status === "FAILED") {
             stopEditActivity();
+            setSubmissionLocked(false);
             setDocumentEditing(true);
             setSourceEditBinding(undefined); setTableEditBinding(undefined);
             void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
             void qc.invalidateQueries({queryKey: ["project", id]})
         }
     }, [editRun.data?.status, id, qc, stopEditActivity, clearEditingDraft]);
-    const saveInlineEdit = useMutation({mutationFn: () => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
+    const saveInlineEdit = useMutation({mutationFn: (requestedVersionName: string) => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
         method: "POST", body: JSON.stringify({expected_revision: draftExpectedRevision || inlineEditor.data?.revision,
+            version_name: requestedVersionName.trim(),
             changes: Object.entries(editorDrafts).map(([edit_key, value]) => ({edit_key, value})),
             table_operations: tableOperations.map(({draft_key: _draftKey, ...operation}) => operation),
-            requirement_operations: requirementOperations.map(({draft_key: _draftKey, ...operation}) => operation)})
-    }), onSuccess: run => setEditRunId(run.id)});
+            requirement_operations: requirementOperations.map(({draft_key: _draftKey, ...operation}) => operation),
+            reference_operations: referenceOperations.map(({draft_key: _draftKey, ...operation}) => operation)})
+    }), onMutate: () => setSubmissionLocked(true), onSuccess: run => setEditRunId(run.id), onError: error => { setSubmissionLocked(false); message.error(error.message) }});
     const retryPublication = useMutation({mutationFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}/retry`, {method: "POST"}),
-        onSuccess: run => { setEditRunId(run.id); void editRun.refetch() }, onError: error => message.error(error.message)});
+        onMutate: () => setSubmissionLocked(true),
+        onSuccess: run => { setEditRunId(run.id); void editRun.refetch() }, onError: error => { setSubmissionLocked(false); message.error(error.message) }});
     const [mainSizes, setMainSizes] = useState<SplitSizes | undefined>(() => loadSplitSizes("main"));
     const [sourceDirectoryOpen, setSourceDirectoryOpen] = useState(false);
     const [requirementDirectoryOpen, setRequirementDirectoryOpen] = useState(false);
@@ -1061,20 +1073,22 @@ function Review() {
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}
         activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation}
         reviewScores={reviewScores} editing={documentEditing} drafts={editorDrafts}
-        onDraft={(binding, value) => { recordEditActivity(); setEditorDrafts(current => ({...current, [binding.edit_key]: value})) }}
+        onDraft={(binding, value) => { if (interactionLocked) return; recordEditActivity(); setEditorDrafts(current => ({...current, [binding.edit_key]: value})) }}
         onEditSources={binding => {
+            if (interactionLocked) return;
             setSourceEditBinding(binding);
             setSourceModalValues([...((editorDrafts[binding.edit_key] ?? binding.value) as string[])]);
             setSourcePickerSearch("")
         }} onEditTables={binding => {
+            if (interactionLocked) return;
             setTableEditBinding(binding);
             setTableModalValues([...((editorDrafts[binding.edit_key] ?? binding.value) as string[])]);
             setTablePickerSearch("");
             setTablePreviewId(undefined)
-        }} tableOperations={tableOperations} requirementOperations={requirementOperations}
+        }} tableOperations={tableOperations} requirementOperations={requirementOperations} referenceOperations={referenceOperations}
         availableTables={inlineEditor.data?.available_tables || []}
         availableSourceRefs={inlineEditor.data?.available_source_refs || []}
-        onTableOperation={operation => { recordEditActivity(); setTableOperations(current => {
+        onTableOperation={operation => { if (interactionLocked) return; recordEditActivity(); setTableOperations(current => {
             if (operation.draft_key) {
                 const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
                 if (duplicate >= 0) {
@@ -1088,7 +1102,7 @@ function Review() {
                 if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
             }
             return [...current, operation]
-        }) }} onRequirementOperation={operation => { recordEditActivity(); setRequirementOperations(current => {
+        }) }} onRequirementOperation={operation => { if (interactionLocked) return; recordEditActivity(); setRequirementOperations(current => {
             if (operation.draft_key) {
                 const duplicate = current.findIndex(item => item.draft_key === operation.draft_key);
                 if (duplicate >= 0) {
@@ -1101,7 +1115,27 @@ function Review() {
                 if (duplicate >= 0) return current.filter((_, index) => index !== duplicate)
             }
             return [...current, operation]
-        }) }} onEditActivityEnd={stopEditActivity} readOnly={rebuilding}/></main>;
+        }) }} onReferenceOperation={operation => { if (interactionLocked) return; recordEditActivity(); setReferenceOperations(current => {
+            if (operation.draft_key) {
+                const draftIndex = current.findIndex(item => item.draft_key === operation.draft_key);
+                if (draftIndex >= 0) {
+                    if (operation.initial_value === undefined) return current.filter((_, index) => index !== draftIndex);
+                    return current.map((item, index) => index === draftIndex ? operation : item)
+                }
+            }
+            if (operation.operation === "update_reference" && operation.reference_key) {
+                return [...current.filter(item => !(item.operation === "update_reference" && item.container_key === operation.container_key
+                    && item.reference_key?.toLocaleUpperCase() === operation.reference_key?.toLocaleUpperCase())), operation]
+            }
+            if (operation.operation === "delete_reference" && operation.reference_key) {
+                const sameKey = (item: Phase2ReferenceOperation) => item.container_key === operation.container_key
+                    && item.reference_key?.toLocaleUpperCase() === operation.reference_key?.toLocaleUpperCase();
+                const existingDelete = current.find(item => item.operation === "delete_reference" && sameKey(item));
+                if (existingDelete) return current.filter(item => item !== existingDelete);
+                return [...current.filter(item => !(item.operation === "update_reference" && sameKey(item))), operation]
+            }
+            return [...current, operation]
+        }) }} onEditActivityEnd={stopEditActivity} readOnly={interactionLocked} interactionLocked={interactionLocked}/></main>;
     const persist = (name: string, setter: (sizes: SplitSizes) => void, threshold: number, bothSides: boolean) => (sizes: number[]) => {
         const next = snappedSizes(sizes, threshold, bothSides);
         setter(next);
@@ -1211,19 +1245,19 @@ function Review() {
                 <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
             </button>
         </Popover>
-        {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={rebuilding || inlineEditor.isLoading}
+        {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={interactionLocked || inlineEditor.isLoading}
             loading={inlineEditor.isLoading}
             onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision); setDocumentEditing(true) }}>编辑文档</Button> : <>
-            <Button ghost disabled={rebuilding} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
+            <Button ghost disabled={interactionLocked} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
-                disabled={(!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length) || inlineEditor.isLoading || inlineEditor.isFetching}
-                onClick={() => { stopEditActivity(); saveInlineEdit.mutate() }}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length}）</Button>
+                disabled={interactionLocked || (!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length && !referenceOperations.length) || inlineEditor.isLoading || inlineEditor.isFetching}
+                onClick={() => { stopEditActivity(); setVersionName(""); setVersionNameModalOpen(true) }}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length + referenceOperations.length}）</Button>
         </>}
         <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
                 onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
         <Button ghost onClick={() => navigate(`/projects/${id}/requirement-diff`)}>变更分析</Button>
         <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
-                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={rebuilding}
+                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={interactionLocked}
                 onClick={() => {
                     setPendingAttention(false);
                     setReviewCenterOpen(true)
@@ -1353,8 +1387,30 @@ function Review() {
                 <div className="phase2-source-table-preview" dangerouslySetInnerHTML={{__html: previewTable.table_html}}/>
             </div> : null}
         </Drawer>
-        {rebuilding && <Alert className="phase2-publication-status" type="info" showIcon
-            message={editRun.data?.savedAt ? "修改已保存，正在后台发布新文档" : "正在保存修改"}
+        <Modal title="填写版本名称" open={versionNameModalOpen} okText="确认保存并重建" cancelText="取消"
+            okButtonProps={{disabled: !versionName.trim() || versionName.trim().length > 50, loading: saveInlineEdit.isPending}}
+            onCancel={() => { if (!saveInlineEdit.isPending) { setVersionNameModalOpen(false); setVersionName("") } }}
+            onOk={() => {
+                const normalized = versionName.trim();
+                if (!normalized || normalized.length > 50) return;
+                setVersionNameModalOpen(false);
+                setSourceEditBinding(undefined); setTableEditBinding(undefined); setTablePreviewId(undefined);
+                saveInlineEdit.mutate(normalized)
+            }} closable={!saveInlineEdit.isPending} maskClosable={!saveInlineEdit.isPending}>
+            <div className="phase2-version-name-form">
+                <p>该名称将显示在版本记录和变更分析中。</p>
+                <Input autoFocus showCount maxLength={50} value={versionName} placeholder="例如：联调问题修订"
+                    onPressEnter={() => {
+                        const normalized = versionName.trim();
+                        if (normalized && normalized.length <= 50) {
+                            setVersionNameModalOpen(false); setSourceEditBinding(undefined); setTableEditBinding(undefined); setTablePreviewId(undefined);
+                            saveInlineEdit.mutate(normalized)
+                        }
+                    }} onChange={event => setVersionName(event.target.value)}/>
+            </div>
+        </Modal>
+        {interactionLocked && <Alert className="phase2-publication-status" type="info" showIcon
+            message={editRun.data?.savedAt ? "修改已保存，正在后台发布新文档" : submissionLocked && !editRunId ? "正在提交修改" : "正在保存修改"}
             description={<>
                 <Progress size="small" percent={editRun.data?.progress || 0}/>
                 <span>当前阶段：{editRun.data?.currentStage ? stageName(editRun.data.currentStage) : "排队中"}</span>

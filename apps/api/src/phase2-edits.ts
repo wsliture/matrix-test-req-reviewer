@@ -88,30 +88,37 @@ export class Phase2EditsService {
     async createBatch(projectId: string, user: {id: string; role: string}, body: any) {
         if (!( ["ADMIN", "REVIEWER"] as string[]).includes(user.role)) throw new ForbiddenException("当前角色没有编辑权限");
         if (typeof body.expected_revision !== "string" || !body.expected_revision) throw new BadRequestException("expected_revision不能为空");
+        const versionName = typeof body.version_name === "string" ? body.version_name.trim() : "";
+        if (!versionName) throw new BadRequestException("版本名称不能为空");
+        if (versionName.length > 50) throw new BadRequestException("版本名称不能超过50个字符");
         const changes = Array.isArray(body.changes) ? body.changes : [], tableOperations = Array.isArray(body.table_operations) ? body.table_operations : [],
-            requirementOperations = Array.isArray(body.requirement_operations) ? body.requirement_operations : [];
-        if (!changes.length && !tableOperations.length && !requirementOperations.length) throw new BadRequestException("changes、table_operations和requirement_operations不能同时为空");
+            requirementOperations = Array.isArray(body.requirement_operations) ? body.requirement_operations : [], referenceOperations = Array.isArray(body.reference_operations) ? body.reference_operations : [];
+        if (!changes.length && !tableOperations.length && !requirementOperations.length && !referenceOperations.length) throw new BadRequestException("编辑操作不能为空");
         if (changes.some((item: any) => typeof item?.edit_key !== "string" || !("value" in item))) throw new BadRequestException("changes格式无效");
         const operations = new Set(["add_row", "delete_row", "add_column", "delete_column"]);
         if (tableOperations.some((item: any) => typeof item?.container_key !== "string" || !operations.has(item?.operation))) throw new BadRequestException("table_operations格式无效");
         const requirementOperationNames = new Set(["add_requirement", "delete_requirement"]);
         if (requirementOperations.some((item: any) => typeof item?.container_key !== "string" || !requirementOperationNames.has(item?.operation)
             || item.operation === "delete_requirement" && typeof item.requirement_key !== "string")) throw new BadRequestException("requirement_operations格式无效");
+        const referenceOperationNames = new Set(["add_reference", "update_reference", "delete_reference"]);
+        if (referenceOperations.some((item: any) => typeof item?.container_key !== "string" || !referenceOperationNames.has(item?.operation)
+            || item.operation !== "add_reference" && typeof item.reference_key !== "string"
+            || item.operation !== "delete_reference" && (typeof item.initial_value?.document_id !== "string" || typeof item.initial_value?.document_title !== "string"))) throw new BadRequestException("reference_operations格式无效");
         const project = await this.db.project.findUniqueOrThrow({where: {id: projectId}});
         const [generation, edit] = await Promise.all([
             this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
             this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}})
         ]);
         if (generation || edit) throw new ConflictException("该项目已有生成或编辑重建任务");
-        const request = {directory: project.workspacePath, expected_revision: body.expected_revision, changes, table_operations: tableOperations,
-            requirement_operations: requirementOperations};
+        const request = {directory: project.workspacePath, expected_revision: body.expected_revision, version_name: versionName, changes, table_operations: tableOperations,
+            requirement_operations: requirementOperations, reference_operations: referenceOperations};
         const run = await this.db.$transaction(async tx => {
             const created = await tx.phase2EditRun.create({data: {projectId, userId: user.id, targetBusinessId: "phase2-document",
                 operation: "batch", expectedRevision: body.expected_revision, request: request as any}});
             await tx.project.update({where: {id: projectId}, data: {status: "REBUILDING"}});
             await tx.auditLog.create({data: {userId: user.id, action: "PHASE2_EDIT_BATCH", resourceType: "Project", resourceId: projectId,
                 detail: {runId: created.id, changeCount: changes.length, tableOperationCount: tableOperations.length,
-                    requirementOperationCount: requirementOperations.length} as any}});
+                    requirementOperationCount: requirementOperations.length, referenceOperationCount: referenceOperations.length, versionName} as any}});
             return created
         });
         await queue.add("phase2-edit", {editRunId: run.id}, {jobId: run.id, removeOnComplete: 100, removeOnFail: 100});

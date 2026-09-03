@@ -195,7 +195,7 @@ export class RequirementRevisionsService {
 
     async list(projectId: string, userId?: string) {
         await this.ensureBaseline(projectId, userId);
-        return this.db.requirementRevision.findMany({where: {projectId, status: "PUBLISHED"}, orderBy: {sequence: "asc"}, select: {id: true, sequence: true, versionLabel: true, kind: true, parentRevisionId: true, baselineRevisionId: true, editRunId: true, changeSummary: true, createdAt: true, publishedAt: true}})
+        return this.db.requirementRevision.findMany({where: {projectId, status: "PUBLISHED"}, orderBy: {sequence: "asc"}, select: {id: true, sequence: true, versionLabel: true, versionName: true, kind: true, parentRevisionId: true, baselineRevisionId: true, editRunId: true, changeSummary: true, createdAt: true, publishedAt: true}})
     }
 
     async get(projectId: string, revisionId: string) {
@@ -241,7 +241,8 @@ export class RequirementRevisionsService {
         await stat(file).catch(() => { throw new NotFoundException("该版本第三方测试需求DOCX不存在") });
         await this.db.auditLog.create({data: {userId, action: "REQUIREMENT_REVISION_DOWNLOADED", resourceType: "RequirementRevision", resourceId: revision.id}});
         reply.header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-        reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`第三方测试需求-${revision.versionLabel}.docx`)}`);
+        const safeName = String(revision.versionName || "").trim().replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, "-");
+        reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`第三方测试需求-${revision.versionLabel}${safeName ? `-${safeName}` : ""}.docx`)}`);
         return reply.send(await readFile(file))
     }
 }

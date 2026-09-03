@@ -62,6 +62,9 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
             "Q/W 1139-2007", "Q/W-Q80-18-01-2014", "Q/W 1141-2007", "RX03"
         ]);
         expect(references.filter(item => item.document_id === "Q/W-Q80-18-01-2014")).toHaveLength(1)
+        expect(references.find(item => item.document_id === "TE-GTCG-003-2021")?.management).toBe("fixed");
+        expect(references.find(item => item.document_id === "Q/W 1139-2007")?.management).toBe("automatic");
+        expect(references.find(item => item.document_id === "RX03")?.management).toBe("project")
     });
 
     it("formats processor type and frequency with explicit labels", () => {
@@ -127,6 +130,9 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         await writeFile(path.join(dataDir, "chapter1-scope.json"), JSON.stringify({document_id: "CASC-SRS", document_version: "1.00"}));
         const requirements = [{id: "chapter1", businessId: "chapter1", artifact: "chapter1-scope.json", parentId: null}];
         const document = await buildPhase2Document(workspace, requirements);
+        const referenceList = document.chapters[0].blocks.find(block => block.type === "reference_list");
+        expect(referenceList?.referenceBinding?.node_id).toBe("chapter1");
+        expect(referenceList?.referenceBinding?.container_key).toBeTruthy();
         const identity = document.chapters[0].blocks.find(block => block.text?.startsWith("a. 文档标识"));
         expect(identity?.parts?.filter(part => part.editable).map(part => part.text)).toEqual(["CASC-SRS", "1.00"]);
         expect(identity?.parts?.filter(part => !part.editable).map(part => part.text).join("")).toContain("文档标识：.RX1，版本号：");

@@ -1,7 +1,7 @@
 import {createElement, useCallback, useEffect, useRef, useState} from "react";
-import {Alert, Button, Input, Modal, Select, Tag} from "antd";
+import {Alert, Button, Input, Modal, Popconfirm, Select, Tag} from "antd";
 import {AuditOutlined, DeleteOutlined, EditOutlined, PlusOutlined} from "@ant-design/icons";
-import type {Phase2Block, Phase2Chapter, Phase2EditBinding, Phase2RequirementOperation, Phase2TableOperation, Phase2TextPart, RequirementDiffAnnotation, SourceRefOption, SourceTableOption, TraceLink} from "./api";
+import type {Phase2Block, Phase2Chapter, Phase2EditBinding, Phase2ReferenceOperation, Phase2RequirementOperation, Phase2TableOperation, Phase2TextPart, RequirementDiffAnnotation, SourceRefOption, SourceTableOption, TraceLink} from "./api";
 import {SortableTableList} from "./SortableTableList";
 
 type Props = {
@@ -23,8 +23,11 @@ type Props = {
     onTableOperation?: (operation: Phase2TableOperation) => void;
     requirementOperations?: Phase2RequirementOperation[];
     onRequirementOperation?: (operation: Phase2RequirementOperation) => void;
+    referenceOperations?: Phase2ReferenceOperation[];
+    onReferenceOperation?: (operation: Phase2ReferenceOperation) => void;
     onEditActivityEnd?: () => void;
     readOnly?: boolean;
+    interactionLocked?: boolean;
     availableTables?: SourceTableOption[];
     availableSourceRefs?: SourceRefOption[];
 };
@@ -212,7 +215,7 @@ function DiffText({annotation, businessId}: {annotation: RequirementDiffAnnotati
         {visible.map((segment, index) => <span key={index} className={segment.type === "DELETE" ? "diff-text-delete" : segment.type === "INSERT" ? "diff-text-insert" : undefined}>{segment.text}</span>)}</>
 }
 
-function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, onEditActivityEnd, readOnly, availableTables, availableSourceRefs}: {
+function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, availableTables, availableSourceRefs}: {
     block: Phase2Block;
     links: TraceLink[];
     activeId?: string;
@@ -226,6 +229,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     editing?: boolean; drafts?: Record<string, unknown>; onDraft?: Props["onDraft"]; onEditSources?: Props["onEditSources"];
     onEditTables?: Props["onEditTables"]; tableOperations?: Phase2TableOperation[]; onTableOperation?: Props["onTableOperation"];
     requirementOperations?: Phase2RequirementOperation[]; onRequirementOperation?: Props["onRequirementOperation"];
+    referenceOperations?: Phase2ReferenceOperation[]; onReferenceOperation?: Props["onReferenceOperation"];
     onEditActivityEnd?: Props["onEditActivityEnd"];
     readOnly?: boolean;
     availableTables?: SourceTableOption[];
@@ -234,6 +238,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     const [requirementModalOpen, setRequirementModalOpen] = useState(false);
     const [newRequirement, setNewRequirement] = useState({content: "", related: "", suffix: "", sourceRefs: [] as string[]});
     const [editingRequirementDraftKey, setEditingRequirementDraftKey] = useState<string>();
+    const [referenceModal, setReferenceModal] = useState<{draftKey?: string; originalId?: string; documentId: string; documentTitle: string}>();
     const functionalRequirement = block.requirementBinding?.mode === "functional";
     const resetRequirementForm = () => {
         setNewRequirement({content: "", related: "", suffix: "", sourceRefs: []});
@@ -290,6 +295,67 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     const pendingRequirementDelete = Boolean(block.requirementKey && (requirementOperations || []).some(item =>
         item.operation === "delete_requirement" && item.requirement_key === block.requirementKey));
     if (block.type === "error") return <Alert type="error" showIcon message={block.text}/>;
+    if (block.type === "reference_list") {
+        const containerKey = block.referenceBinding?.container_key;
+        const operations = (referenceOperations || []).filter(item => item.container_key === containerKey);
+        const deleted = new Set(operations.filter(item => item.operation === "delete_reference").map(item => item.reference_key?.toLocaleUpperCase()));
+        const updates = new Map(operations.filter(item => item.operation === "update_reference").map(item => [item.reference_key?.toLocaleUpperCase(), item]));
+        type DisplayReference = NonNullable<Phase2Block["references"]>[number] & {pending?: boolean; originalId?: string; draftKey?: string};
+        const existing: DisplayReference[] = (block.references || []).filter(item => !deleted.has(item.document_id.toLocaleUpperCase())).map(item => {
+            const update = updates.get(item.document_id.toLocaleUpperCase());
+            return update?.initial_value ? {...item, ...update.initial_value, pending: true, originalId: item.document_id, draftKey: update.draft_key} : {...item, originalId: item.document_id}
+        });
+        const added: DisplayReference[] = operations.filter(item => item.operation === "add_reference" && item.initial_value).map(item => ({
+            ...item.initial_value!, management: "project" as const, pending: true, originalId: undefined, draftKey: item.draft_key
+        }));
+        const display = [...existing, ...added];
+        const referenceLeaf = annotation?.leafChanges?.find(item => item.path === "content.references");
+        const sideReferences = Array.isArray(annotation?.side === "before" ? referenceLeaf?.before : referenceLeaf?.after)
+            ? (annotation?.side === "before" ? referenceLeaf?.before : referenceLeaf?.after) as {document_id?: string; document_title?: string}[] : [];
+        const counterpartReferences = Array.isArray(annotation?.side === "before" ? referenceLeaf?.after : referenceLeaf?.before)
+            ? (annotation?.side === "before" ? referenceLeaf?.after : referenceLeaf?.before) as {document_id?: string; document_title?: string}[] : [];
+        const counterpartById = new Map(counterpartReferences.map(item => [String(item.document_id || "").trim().toLocaleUpperCase(), item]));
+        const referenceDiff = (item: DisplayReference) => {
+            if (!referenceLeaf || !sideReferences.some(value => String(value.document_id || "").trim().toLocaleUpperCase() === item.document_id.trim().toLocaleUpperCase())) return undefined;
+            const counterpart = counterpartById.get(item.document_id.trim().toLocaleUpperCase());
+            if (!counterpart) return annotation?.side === "before" ? "delete" : "insert";
+            return String(counterpart.document_title || "") !== item.document_title ? "modify" : undefined
+        };
+        const referenceIdConflict = Boolean(referenceModal?.documentId.trim() && display.some(item =>
+            item.document_id.trim().toLocaleUpperCase() === referenceModal.documentId.trim().toLocaleUpperCase()
+            && item.originalId !== referenceModal.originalId && item.draftKey !== referenceModal.draftKey));
+        const close = () => { setReferenceModal(undefined); onEditActivityEnd?.() };
+        const submit = () => {
+            if (!containerKey || !referenceModal?.documentId.trim() || !referenceModal.documentTitle.trim()) return;
+            onReferenceOperation?.({container_key: containerKey,
+                operation: referenceModal.originalId ? "update_reference" : "add_reference",
+                reference_key: referenceModal.originalId,
+                draft_key: referenceModal.draftKey || draftKey("reference"),
+                initial_value: {document_id: referenceModal.documentId.trim(), document_title: referenceModal.documentTitle.trim()}});
+            close()
+        };
+        return <div className="phase2-reference-list">
+            {display.map((item, index) => { const diff = referenceDiff(item); return <div className={`phase2-reference-row${item.pending ? " phase2-reference-pending" : ""}${diff ? ` diff-reference-${diff}` : ""}`} key={item.draftKey || item.originalId || `${item.document_id}-${index}`}>
+                <span className="phase2-reference-id">{item.document_id}</span><span className="phase2-reference-title">{item.document_title}</span>
+                {diff && <Tag color={diff === "delete" ? "red" : diff === "insert" ? "green" : "blue"}>{diff === "delete" ? "删除" : diff === "insert" ? "新增" : "修改"}</Tag>}
+                {editing && item.management === "fixed" && <Tag className="phase2-reference-kind">固定</Tag>}
+                {editing && item.management === "automatic" && <Tag className="phase2-reference-kind">自动维护</Tag>}
+                {editing && item.management === "project" && <span className="phase2-reference-actions">
+                    <Button type="text" size="small" icon={<EditOutlined/>} onClick={() => setReferenceModal({draftKey: item.draftKey, originalId: item.originalId, documentId: item.document_id, documentTitle: item.document_title})}>编辑</Button>
+                    <Popconfirm title={item.originalId ? "确认删除此引用文档？" : "确认撤销新增？"} okText="确认" cancelText="取消" onConfirm={() => onReferenceOperation?.({container_key: containerKey!, operation: item.originalId ? "delete_reference" : "add_reference", reference_key: item.originalId, draft_key: item.draftKey})}>
+                        <Button type="text" danger size="small" icon={<DeleteOutlined/>}>{item.originalId ? "删除" : "撤销"}</Button>
+                    </Popconfirm>
+                </span>}
+            </div>})}
+            {editing && containerKey && <div className="phase2-reference-add"><Button size="small" icon={<PlusOutlined/>} onClick={() => setReferenceModal({documentId: "", documentTitle: ""})}>新增引用文档</Button></div>}
+            <Modal title={referenceModal?.originalId ? "编辑引用文档" : "新增引用文档"} open={Boolean(referenceModal)} okText="加入修改" cancelText="取消"
+                okButtonProps={{disabled: !referenceModal?.documentId.trim() || !referenceModal?.documentTitle.trim() || referenceIdConflict}} onOk={submit} onCancel={close} destroyOnHidden>
+                <div className="phase2-reference-form"><Input value={referenceModal?.documentId} placeholder="文档标识" onChange={event => setReferenceModal(current => current && ({...current, documentId: event.target.value}))}/>
+                    <Input value={referenceModal?.documentTitle} placeholder="文档名称" onChange={event => setReferenceModal(current => current && ({...current, documentTitle: event.target.value}))}/></div>
+                {referenceIdConflict && <Alert type="error" showIcon message="文档标识已存在，请使用不同的标识"/>}
+            </Modal>
+        </div>
+    }
     if (block.type === "requirement_actions") {
         if (!editing || !block.requirementBinding?.allow_add) return null;
         const pending = (requirementOperations || []).filter(item => item.container_key === block.requirementBinding?.container_key && item.operation === "add_requirement");
@@ -487,9 +553,17 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     </div>
 }
 
-export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, onEditActivityEnd, readOnly, availableTables, availableSourceRefs}: Props) {
+export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, interactionLocked, availableTables, availableSourceRefs}: Props) {
+    const documentRef = useRef<HTMLElement>(null);
+    useEffect(() => {
+        if (interactionLocked && documentRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement)?.blur()
+    }, [interactionLocked]);
     const annotationsByNode = new Map(diffAnnotations.filter(item => item.nodeId).map(item => [item.nodeId!, item]));
     const annotationForBlock = (block: Phase2Block) => {
+        if (block.type === "reference_list" && block.referenceBinding?.node_id) {
+            const referenceAnnotation = annotationsByNode.get(block.referenceBinding.node_id);
+            if (referenceAnnotation?.leafChanges?.some(item => item.path === "content.references")) return referenceAnnotation
+        }
         const bindings = blockBindings(block);
         const tableField = block.tableBinding ? editKeyField(block.tableBinding.container_key) : "";
         const structural = tableField ? bindings.map(binding => annotationsByNode.get(binding.node_id)).find(item =>
@@ -500,13 +574,14 @@ export function Phase2DocumentRenderer({chapters, links, activeId, mode = "revie
         const direct = block.anchorId ? annotationsByNode.get(block.anchorId) : undefined;
         return direct?.nodeType === "requirement" || direct && block.sourceBinding && direct.changedFields?.includes("sourceRefs") ? direct : undefined
     };
-    return <article className="phase2-document">
+    return <article ref={documentRef} className={`phase2-document${interactionLocked ? " phase2-interaction-locked" : ""}`} aria-disabled={interactionLocked || undefined} {...(interactionLocked ? {inert: true} : {})}>
         <header><h1>第三方测试需求</h1></header>
         {chapters.map(chapter => <div className="phase2-chapter" data-artifact={chapter.artifact} key={chapter.artifact}>
             {chapter.blocks.map((block, index) => <Block key={`${chapter.artifact}-${index}`} block={block}
                                                          links={links} activeId={activeId} mode={mode} annotation={annotationForBlock(block)} diffAnnotationsByNode={annotationsByNode} selectedEntityUid={selectedEntityUid} reviewScores={reviewScores}
                                                          onSource={onSource} onEvaluate={onEvaluate} editing={editing} drafts={drafts} onDraft={onDraft} onEditSources={onEditSources} onEditTables={onEditTables} tableOperations={tableOperations} onTableOperation={onTableOperation}
                                                          requirementOperations={requirementOperations} onRequirementOperation={onRequirementOperation}
+                                                         referenceOperations={referenceOperations} onReferenceOperation={onReferenceOperation}
                                                          onEditActivityEnd={onEditActivityEnd}
                                                          readOnly={readOnly} availableTables={availableTables} availableSourceRefs={availableSourceRefs}/>)}</div>)}
     </article>

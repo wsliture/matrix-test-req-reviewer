@@ -78,7 +78,7 @@ function nodeChanges(before: any[], after: any[]) {
 
 export async function createRequirementRevision(db: Pool, input: {
     projectId: string; workspace: string; kind: "GENERATED_BASELINE" | "PUBLISHED";
-    userId?: string; editRunId?: string; sourceRevision?: string; resultRevision?: string;
+    userId?: string; editRunId?: string; versionName?: string; sourceRevision?: string; resultRevision?: string;
 }) {
     const client = await db.connect();
     let temp = "";
@@ -114,16 +114,16 @@ export async function createRequirementRevision(db: Pool, input: {
             fileRecords.push({path: relative.replace(/\\/g, "/"), size: content.length, sha256: sha256(content)})
         }
         const baseline = previous?.baselineRevisionId || (previous?.kind?.endsWith("BASELINE") ? previous.id : null) || (input.kind.endsWith("BASELINE") ? id : null);
-        const manifest = {schemaVersion: 1, rendererSchemaVersion: 1, revisionId: id, sequence, versionLabel: `V${sequence}`,
+        const manifest = {schemaVersion: 1, rendererSchemaVersion: 1, revisionId: id, sequence, versionLabel: `V${sequence}`, versionName: input.versionName || null,
             kind: input.kind, parentRevisionId: previous?.id || null, baselineRevisionId: baseline,
             projectId: input.projectId, editRunId: input.editRunId || null, createdAt: new Date().toISOString(), files: fileRecords, summary: diff.summary};
         const manifestText = json(manifest);
         await writeFile(path.join(temp, "manifest.json"), manifestText);
         await mkdir(revisionsRoot, {recursive: true});
         await rename(temp, finalRoot);
-        await client.query(`insert into "RequirementRevision" (id,"projectId",sequence,"versionLabel",kind,status,"parentRevisionId","baselineRevisionId","editRunId","storagePath","manifestHash","sourceRevision","resultRevision","changeSummary","createdById","publishedAt")
-            values ($1,$2,$3,$4,$5,'PUBLISHED',$6,$7,$8,$9,$10,$11,$12,$13,$14,now())`,
-            [id, input.projectId, sequence, `V${sequence}`, input.kind, previous?.id || null, baseline, input.editRunId || null,
+        await client.query(`insert into "RequirementRevision" (id,"projectId",sequence,"versionLabel","versionName",kind,status,"parentRevisionId","baselineRevisionId","editRunId","storagePath","manifestHash","sourceRevision","resultRevision","changeSummary","createdById","publishedAt")
+            values ($1,$2,$3,$4,$5,$6,'PUBLISHED',$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
+            [id, input.projectId, sequence, `V${sequence}`, input.versionName || null, input.kind, previous?.id || null, baseline, input.editRunId || null,
                 finalRoot, sha256(manifestText), input.sourceRevision || null, input.resultRevision || null, JSON.stringify(diff.summary), input.userId || null]);
         if (previous) {
             await client.query(`insert into "RequirementChangeSet" (id,"projectId","fromRevisionId","toRevisionId","algorithmVersion",summary,changes,warnings)
