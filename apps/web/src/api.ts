@@ -297,6 +297,7 @@ export type RequirementChange = {entityUid: string; type: "ADDED" | "DELETED" | 
         addedRows: {index: number; value: unknown}[]; deletedRows: {index: number; value: unknown}[]}[]};
 export type RequirementDiffAnnotation = {entityUid: string; nodeId?: string; businessId?: string; type: RequirementChange["type"];
     nodeType?: string; side: "before" | "after"; segments?: RequirementChange["textSegments"]; changedFields?: string[];
-    changedValues?: string[]; leafChanges?: RequirementChange["leafChanges"]; tableChanges?: RequirementChange["tableChanges"]};
+    changedValues?: string[]; leafChanges?: RequirementChange["leafChanges"]; tableChanges?: RequirementChange["tableChanges"];
+    sourceRefs?: string[]; counterpartSourceRefs?: string[]};
 export type RequirementDiff = {from: RequirementRevision; to: RequirementRevision; algorithmVersion: string;
     summary: Record<string, number>; changes: RequirementChange[]; warnings: string[]};

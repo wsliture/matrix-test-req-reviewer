@@ -44,21 +44,25 @@ const tableOption = (values: SourceTableOption[] | undefined, key: string) => {
     return index.get(key)
 };
 
-function TraceSourceLinks({targetId, links, onSource, inline = false, editing, binding, onEditSources, drafts, availableSourceRefs}: {
+function TraceSourceLinks({targetId, links, onSource, inline = false, editing, binding, onEditSources, drafts, availableSourceRefs, annotation}: {
     targetId?: string;
     links: TraceLink[];
     onSource: (link: TraceLink) => void;
     inline?: boolean; editing?: boolean; binding?: Phase2EditBinding; onEditSources?: (binding: Phase2EditBinding) => void;
-    drafts?: Record<string, unknown>; availableSourceRefs?: SourceRefOption[]
+    drafts?: Record<string, unknown>; availableSourceRefs?: SourceRefOption[]; annotation?: RequirementDiffAnnotation
 }) {
     if (!targetId) return null;
     const values = [...new Map(links.filter(link => link.targetNodeId === targetId)
         .map(link => [link.sourceNodeId, link])).values()];
     const hasDraft = Boolean(editing && binding && Object.prototype.hasOwnProperty.call(drafts || {}, binding.edit_key));
     const draftRefs = hasDraft ? (drafts?.[binding!.edit_key] as string[] || []) : undefined;
-    if (!values.length && !hasDraft) return null;
+    const diffRefs = annotation?.sourceRefs;
+    if (!values.length && !hasDraft && !diffRefs?.length && !annotation?.changedFields?.includes("sourceRefs")) return null;
     const Wrapper = inline ? "span" : "div";
     const openEditor = () => editing && binding && onEditSources?.(binding);
+    const counterpart = new Set(annotation?.counterpartSourceRefs || []);
+    const linkByRef = new Map(values.map(link => [link.sourceNode.sourceRef, link]));
+    const diffColor = (sourceRef: string) => counterpart.has(sourceRef) ? "blue" : annotation?.side === "before" ? "red" : "green";
     return <Wrapper className={inline ? "trace-source-links trace-source-links-inline" : "trace-source-links trace-source-links-block"}>
         <span className={`trace-source-label${editing && binding ? " phase2-editable-source" : ""}`} onClick={openEditor}>追溯来源：</span>
         {hasDraft ? draftRefs!.map(sourceRef => {
@@ -66,9 +70,16 @@ function TraceSourceLinks({targetId, links, onSource, inline = false, editing, b
             return <Tag color="blue" key={sourceRef} className="phase2-editable-source" onClick={openEditor}>
                 {option ? `${option.document_name} ${option.number || option.title}` : sourceRef}
             </Tag>
+        }) : diffRefs ? diffRefs.map(sourceRef => {
+            const link = linkByRef.get(sourceRef), changed = !counterpart.has(sourceRef);
+            return <Tag color={diffColor(sourceRef)} key={sourceRef} className={changed ? annotation?.side === "before" ? "diff-trace-delete" : "diff-trace-insert" : undefined}>
+                {link ? `${link.sourceNode.document?.name?.replace(/\.docx$/i, "") || ""} ${link.sourceNode.number || link.sourceNode.title}`.trim() : sourceRef}
+                {changed ? `（${annotation?.side === "before" ? "删除" : "新增"}）` : ""}
+            </Tag>
         }) : values.map(link => <Tag color="blue" key={link.id} className={editing && binding ? "phase2-editable-source" : ""} onClick={() => editing && binding && onEditSources ? onEditSources(binding) : onSource(link)}>
             {link.sourceNode.document?.name.replace(/\.docx$/i, "")} {link.sourceNode.number || link.sourceNode.title}
         </Tag>)}
+        {diffRefs?.length === 0 && annotation?.changedFields?.includes("sourceRefs") && <Tag>无</Tag>}
     </Wrapper>
 }
 
@@ -365,11 +376,11 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
                             disabled={readOnly} onClick={() => onEvaluate(block.anchorId!)}>
                         内容质量评估{reviewScores?.[block.anchorId] !== undefined ? ` · 已评 ${reviewScores[block.anchorId].toFixed(2)}` : ""}
                     </Button>}</div></div>
-            <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} editing={editing} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs}/>
+            <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} editing={editing} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
         </section>
     }
     if (block.type === "paragraph") return <div {...anchorProps} className={`phase2-paragraph${active}${diffClass}${pendingRequirementDelete ? " phase2-requirement-pending-delete" : ""}`}>
-        <p>{annotation && block.businessId && annotation.nodeType === "requirement" ? <DiffText annotation={annotation} businessId={block.businessId}/> : renderParts(block.parts, block.text, {editing: editing && !pendingRequirementDelete, drafts, onDraft, annotation})}<TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} inline editing={editing && !pendingRequirementDelete} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs}/>
+        <p>{annotation && block.businessId && annotation.nodeType === "requirement" ? <DiffText annotation={annotation} businessId={block.businessId}/> : renderParts(block.parts, block.text, {editing: editing && !pendingRequirementDelete, drafts, onDraft, annotation})}<TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} inline editing={editing && !pendingRequirementDelete} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
             {editing && block.requirementKey && block.requirementBinding && <Button className="phase2-requirement-delete" type="text" danger size="small" icon={<DeleteOutlined/>}
                 onClick={() => onRequirementOperation?.({container_key: block.requirementBinding!.container_key, operation: "delete_requirement", requirement_key: block.requirementKey})}>{pendingRequirementDelete ? "撤销删除" : "删除 TR"}</Button>}</p></div>;
     if (block.type === "list") return <div className="phase2-list">{block.items?.map((item, index) => <p
@@ -457,7 +468,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
                         values[rowIndex] = value;
                         onTableOperation?.({...addedColumn, initial_value: {...draft, values}})
                     }}/> : block.cellBindings?.[rowIndex]?.[index] ? <EditablePart part={{text: cell, editable: true, binding: block.cellBindings[rowIndex][index]!}} editing={editing && !requirementPendingDelete && !columnPendingDelete} drafts={drafts} onDraft={onDraft} tableCell annotation={annotation}/> : cell}{index === 1 && rowId ?
-                        <TraceSourceLinks targetId={rowId} links={links} onSource={onSource} inline editing={editing && !requirementPendingDelete} binding={block.rowSourceBindings?.[rowIndex]} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs}/> : null}
+                        <TraceSourceLinks targetId={rowId} links={links} onSource={onSource} inline editing={editing && !requirementPendingDelete} binding={block.rowSourceBindings?.[rowIndex]} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={rowAnnotation}/> : null}
                         {editing && !added && index === row.length - 1 && block.rowRequirementKeys?.[rowIndex] && block.requirementBinding && (
                             <Button className="phase2-table-row-delete" type="text" danger size="small" title={requirementPendingDelete ? "撤销删除" : "删除TR"} icon={<DeleteOutlined/>}
                                 onClick={() => onRequirementOperation?.({container_key: block.requirementBinding!.container_key, operation: "delete_requirement", requirement_key: block.rowRequirementKeys![rowIndex]})}>{requirementPendingDelete ? "撤销" : ""}</Button>

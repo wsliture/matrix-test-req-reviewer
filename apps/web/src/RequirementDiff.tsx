@@ -3,7 +3,7 @@ import {Alert, Button, Empty, Input, Select, Space, Spin, Switch, Tag} from "ant
 import {ArrowLeftOutlined, ArrowRightOutlined, DownloadOutlined, SwapOutlined} from "@ant-design/icons";
 import {useQuery} from "@tanstack/react-query";
 import {useNavigate, useParams} from "react-router-dom";
-import {api, downloadApi, saveDownload, type Phase2Chapter, type RequirementChange, type RequirementDiff as Diff, type RequirementDiffAnnotation, type RequirementRevision} from "./api";
+import {api, downloadApi, saveDownload, type Phase2Chapter, type RequirementChange, type RequirementDiff as Diff, type RequirementDiffAnnotation, type RequirementRevision, type TraceLink} from "./api";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 
 const LABEL: Record<string, string> = {ADDED: "新增", DELETED: "删除", MODIFIED: "修改", MOVED: "移动", RENUMBERED: "重编号", TRACE_CHANGED: "追溯变化", TABLE_CHANGED: "表格变化"};
@@ -37,8 +37,8 @@ export function RequirementDiffPage() {
     const actualFrom = fromId || revisions.data?.[0]?.id, actualTo = toId || revisions.data?.at(-1)?.id;
     const diff = useQuery({queryKey: ["requirement-diff", id, actualFrom, actualTo], enabled: Boolean(actualFrom && actualTo),
         queryFn: () => api<Diff>(`/projects/${id}/requirement-diff?from=${encodeURIComponent(actualFrom!)}&to=${encodeURIComponent(actualTo!)}`)});
-    const left = useQuery({queryKey: ["revision-document", id, actualFrom], enabled: Boolean(actualFrom), queryFn: () => api<{chapters: Phase2Chapter[]}>(`/projects/${id}/requirement-revisions/${actualFrom}/document`)});
-    const right = useQuery({queryKey: ["revision-document", id, actualTo], enabled: Boolean(actualTo), queryFn: () => api<{chapters: Phase2Chapter[]}>(`/projects/${id}/requirement-revisions/${actualTo}/document`)});
+    const left = useQuery({queryKey: ["revision-document", id, actualFrom], enabled: Boolean(actualFrom), queryFn: () => api<{chapters: Phase2Chapter[]; links: TraceLink[]}>(`/projects/${id}/requirement-revisions/${actualFrom}/document`)});
+    const right = useQuery({queryKey: ["revision-document", id, actualTo], enabled: Boolean(actualTo), queryFn: () => api<{chapters: Phase2Chapter[]; links: TraceLink[]}>(`/projects/${id}/requirement-revisions/${actualTo}/document`)});
     const visible = useMemo(() => (diff.data?.changes || []).filter(change => (!kind || change.type === kind) && (!search.trim() ||
         `${change.before?.businessId || ""} ${change.before?.title || ""} ${change.after?.businessId || ""} ${change.after?.title || ""}`.toLowerCase().includes(search.trim().toLowerCase()))), [diff.data, kind, search]);
     const selected = visible.find(item => item.entityUid === selectedUid), selectedIndex = selected ? visible.indexOf(selected) : -1;
@@ -49,7 +49,8 @@ export function RequirementDiffPage() {
     const annotations = (side: "before" | "after"): RequirementDiffAnnotation[] => visible.flatMap(change => {
         const node = side === "before" ? change.before : change.after;
         const changedValues = (change.leafChanges || []).map(item => side === "before" ? item.before : item.after).filter(value => typeof value === "string" || typeof value === "number").map(String);
-        return node ? [{entityUid: change.entityUid, nodeId: node.id, businessId: node.businessId, nodeType: node.nodeType, type: change.type, side, segments: change.textSegments, changedFields: change.changedFields, changedValues, leafChanges: change.leafChanges, tableChanges: change.tableChanges}] : []
+        const counterpart = side === "before" ? change.after : change.before;
+        return node ? [{entityUid: change.entityUid, nodeId: node.id, businessId: node.businessId, nodeType: node.nodeType, type: change.type, side, segments: change.textSegments, changedFields: change.changedFields, changedValues, leafChanges: change.leafChanges, tableChanges: change.tableChanges, sourceRefs: node.sourceRefs || [], counterpartSourceRefs: counterpart?.sourceRefs || []}] : []
     });
     const scrollTarget = (pane: HTMLElement | null, change: RequirementChange, side: "before" | "after") => {
         if (!pane) return;
@@ -103,7 +104,7 @@ export function RequirementDiffPage() {
             <Button icon={<ArrowLeftOutlined/>} disabled={!visible.length} onClick={() => navigateChange(-1)}>上一项</Button><Button icon={<ArrowRightOutlined/>} disabled={!visible.length} onClick={() => navigateChange(1)}>下一项</Button></Space></section>
         <div className="requirement-diff-body"><aside className="requirement-diff-directory"><h3>变更目录</h3><div className="diff-summary">{Object.entries(diff.data?.summary || {}).map(([key, count]) => count ? <Tag color={COLOR[key]} key={key}>{LABEL[key]} {count}</Tag> : null)}</div>
             {!visible.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="两个版本没有符合条件的变化"/> : groups.map(group => <section className="diff-directory-group" key={group.chapter}><h4>{group.chapter}</h4>{group.items.map(change => { const node = change.after || change.before, label = node?.nodeType === "section" ? `${node.number} ${node.title}` : node?.businessId; return <button aria-pressed={selectedUid === change.entityUid} className={`diff-change-item diff-${change.type.toLowerCase()}${selectedUid === change.entityUid ? " is-selected" : ""}`} key={`${change.entityUid}-${change.type}`} onClick={() => selectChange(change)}><Tag color={COLOR[change.type]}>{LABEL[change.type]}</Tag><span>{label}<small>{node?.nodeType === "section" ? "文档章节" : node?.title}</small><em>{(change.changedFields || []).map(fieldLabel).join("、") || "整条需求"}</em></span></button>})}</section>)}</aside>
-            <main className="requirement-diff-documents"><section ref={leftPane} onScroll={event => syncByAnchor(event.currentTarget, rightPane.current)}><div className="diff-pane-title">基准版本：{diff.data?.from.versionLabel}</div>{selected && !selected.before && <div className="diff-document-placeholder">{diff.data?.from.versionLabel} 中不存在此需求</div>}<Phase2DocumentRenderer mode="diff-before" chapters={chapters(left.data)} links={[]} diffAnnotations={annotations("before")} selectedEntityUid={selectedUid} onSource={() => undefined} onEvaluate={() => undefined} readOnly/></section>
-                <section ref={rightPane} onScroll={event => syncByAnchor(event.currentTarget, leftPane.current)}><div className="diff-pane-title">对比版本：{diff.data?.to.versionLabel}</div>{selected && !selected.after && <div className="diff-document-placeholder">{diff.data?.to.versionLabel} 中已删除此需求</div>}<Phase2DocumentRenderer mode="diff-after" chapters={chapters(right.data)} links={[]} diffAnnotations={annotations("after")} selectedEntityUid={selectedUid} onSource={() => undefined} onEvaluate={() => undefined} readOnly/></section></main></div>
+            <main className="requirement-diff-documents"><section ref={leftPane} onScroll={event => syncByAnchor(event.currentTarget, rightPane.current)}><div className="diff-pane-title">基准版本：{diff.data?.from.versionLabel}</div>{selected && !selected.before && <div className="diff-document-placeholder">{diff.data?.from.versionLabel} 中不存在此需求</div>}<Phase2DocumentRenderer mode="diff-before" chapters={chapters(left.data)} links={left.data?.links || []} diffAnnotations={annotations("before")} selectedEntityUid={selectedUid} onSource={() => undefined} onEvaluate={() => undefined} readOnly/></section>
+                <section ref={rightPane} onScroll={event => syncByAnchor(event.currentTarget, leftPane.current)}><div className="diff-pane-title">对比版本：{diff.data?.to.versionLabel}</div>{selected && !selected.after && <div className="diff-document-placeholder">{diff.data?.to.versionLabel} 中已删除此需求</div>}<Phase2DocumentRenderer mode="diff-after" chapters={chapters(right.data)} links={right.data?.links || []} diffAnnotations={annotations("after")} selectedEntityUid={selectedUid} onSource={() => undefined} onEvaluate={() => undefined} readOnly/></section></main></div>
     </div>
 }

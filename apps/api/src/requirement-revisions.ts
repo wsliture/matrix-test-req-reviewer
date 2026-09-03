@@ -207,8 +207,13 @@ export class RequirementRevisionsService {
     async document(projectId: string, revisionId: string) {
         const revision = await this.get(projectId, revisionId), saved = path.join(revision.storagePath, "index", "phase2-document.json");
         const value = JSON.parse(await readFile(saved, "utf8"));
-        if (Array.isArray(value.chapters)) return value;
-        return buildPhase2DocumentFromDataDir(path.join(revision.storagePath, "data"), value.requirements || await this.nodes(revision))
+        const document = Array.isArray(value.chapters) ? value : await buildPhase2DocumentFromDataDir(path.join(revision.storagePath, "data"), value.requirements || await this.nodes(revision));
+        const rawLinks = JSON.parse(await readFile(path.join(revision.storagePath, "index", "trace-links.json"), "utf8"));
+        const links = rawLinks.map((link: any) => link.sourceNode ? link : {...link, sourceNode: {
+            id: link.sourceNodeId, sourceRef: link.sourceRef, number: link.sourceNumber, title: link.sourceTitle,
+            document: {name: link.documentName}
+        }});
+        return {...document, links}
     }
 
     async diff(projectId: string, fromId: string | undefined, toId: string | undefined, userId?: string) {

@@ -2102,3 +2102,13 @@ html, body, #root {
     color: #237804;
     background: #b7eb8f
 }
+
+.requirement-diff-page .diff-trace-delete {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px
+}
+
+.requirement-diff-page .diff-trace-insert,
+.requirement-diff-page .diff-trace-delete {
+    font-weight: 600
+}
