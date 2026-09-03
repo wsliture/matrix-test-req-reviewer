@@ -55,7 +55,7 @@ done
 [ -f "$TARGET_DIR/docker-compose.yml" ] || fail "旧部署缺少docker-compose.yml"
 
 echo "[1/8] 校验新离线包完整性..."
-(cd "$SOURCE_DIR" && sha256sum -c SHA256SUMS)
+(cd "$SOURCE_DIR" && sed 's/\r$//' SHA256SUMS | sha256sum -c -)
 
 timestamp=$(date +%Y%m%d-%H%M%S)
 target_parent=$(dirname "$TARGET_DIR")

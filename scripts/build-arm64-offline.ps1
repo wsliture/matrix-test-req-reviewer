@@ -133,7 +133,22 @@ $IntegrityLines = $IntegrityFiles |
     $Hash = (Get-FileHash $AbsolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
     "$Hash  $($_ -replace '\\', '/')"
   }
-$IntegrityLines | Set-Content (Join-Path $OutputPath "SHA256SUMS") -Encoding ascii
+$Sha256SumsPath = Join-Path $OutputPath "SHA256SUMS"
+# The bundle is consumed by GNU sha256sum on Linux. PowerShell's Set-Content
+# uses the host platform newline, so packages built on Windows used to contain
+# CRLF here and sha256sum treated the trailing CR as part of every filename.
+# Write the manifest as ASCII with explicit Unix LF line endings instead.
+$Sha256SumsContent = ($IntegrityLines -join "`n") + "`n"
+[System.IO.File]::WriteAllText(
+  $Sha256SumsPath,
+  $Sha256SumsContent,
+  [System.Text.Encoding]::ASCII
+)
+
+$Sha256SumsBytes = [System.IO.File]::ReadAllBytes($Sha256SumsPath)
+if ($Sha256SumsBytes -contains 13) {
+  throw "SHA256SUMS包含CR字符，无法生成Linux离线包"
+}
 
 $Manifest = [ordered]@{
   generatedAt = (Get-Date).ToString("o")
