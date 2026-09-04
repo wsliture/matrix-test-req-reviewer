@@ -53,10 +53,18 @@ services:
     environment:
       OPENCODE_SERVER_USERNAME: ${OPENCODE_USERNAME:?请在.env中设置OPENCODE_USERNAME}
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_PASSWORD:?请在.env中设置OPENCODE_PASSWORD}
+      PROJECTS_ROOT: /data/projects
+      MATRIX_PHASE2_RUNNER_PORT: "4097"
     env_file: .env
     volumes:
       - ./data/projects:/data/projects
       - ./data/opencode-config:/root/.config/opencode
+    healthcheck:
+      test: ["CMD", "node", "/usr/local/bin/opencode-healthcheck.mjs"]
+      interval: 5s
+      timeout: 6s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
 
   api:
@@ -79,7 +87,7 @@ services:
       minio:
         condition: service_healthy
       opencode:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./data/projects:/data/projects
       - ./data/opencode-config:/opencode-config
@@ -105,7 +113,7 @@ services:
       minio:
         condition: service_healthy
       opencode:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./data/projects:/data/projects
       - ./data/opencode-config:/opencode-config:ro

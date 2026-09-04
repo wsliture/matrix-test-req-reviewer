@@ -27,14 +27,30 @@ services:
     environment:
       OPENCODE_SERVER_USERNAME: ${OPENCODE_USERNAME:-opencode}
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_PASSWORD:-opencode}
+      PROJECTS_ROOT: /data/projects
+      MATRIX_PHASE2_RUNNER_PORT: "4097"
     env_file: ${ENV_FILE:-.env}
     volumes:
       - projects:/data/projects
       - opencode-config:/root/.config/opencode
+    healthcheck:
+      test: [ "CMD", "node", "/usr/local/bin/opencode-healthcheck.mjs" ]
+      interval: 5s
+      timeout: 6s
+      retries: 30
+      start_period: 10s
   api:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: api }
     env_file: ${ENV_FILE:-.env}
-    depends_on: [ postgres, redis, minio, opencode ]
+    depends_on:
+      opencode:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
     ports: [ "3000:3000" ]
     volumes:
       - projects:/data/projects
@@ -44,7 +60,15 @@ services:
   worker:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: worker }
     env_file: ${ENV_FILE:-.env}
-    depends_on: [ postgres, redis, minio, opencode ]
+    depends_on:
+      opencode:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
     environment:
       OPENCODE_CONFIG_PATH: /opencode-config/opencode.json
       MATRIX_PHASE2_RUNNER_URL: http://opencode:4097

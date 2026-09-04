@@ -97,6 +97,48 @@ foreach ($Image in $AllImages) {
   }
 }
 
+Write-Host "验证ARM64 OpenCode镜像中的Node Phase 2 runner..."
+$OpenCodeImage = "requirements-manager-opencode:arm64"
+Invoke-Checked "docker" @(
+  "run", "--rm", "--platform", "linux/arm64", "--entrypoint", "node",
+  $OpenCodeImage, "-e", "console.log(process.arch, 'node runtime ok')"
+)
+Invoke-Checked "docker" @(
+  "run", "--rm", "--platform", "linux/arm64", "--entrypoint", "sh", $OpenCodeImage, "-lc",
+  "test -s /plugin/dist/direct-phase2-runner.js && ! grep -aEq 'Bun\.(serve|file|Glob)|import\.meta\.dir' /plugin/dist/direct-phase2-runner.js"
+)
+
+$RunnerCheckContainer = "requirements-manager-opencode-arm64-check-$PID"
+try {
+  $ContainerId = (& docker run -d --platform linux/arm64 --name $RunnerCheckContainer `
+    -e OPENCODE_SERVER_USERNAME=opencode `
+    -e OPENCODE_SERVER_PASSWORD=runner-check `
+    -e PROJECTS_ROOT=/data/projects `
+    -e MATRIX_PHASE2_RUNNER_PORT=4097 `
+    $OpenCodeImage opencode serve --hostname 0.0.0.0 --port 4096 --print-logs --log-level INFO).Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $ContainerId) {
+    throw "无法启动ARM64 OpenCode镜像验证容器"
+  }
+  $Healthy = $false
+  for ($Attempt = 1; $Attempt -le 60; $Attempt++) {
+    # 服务启动期间健康检查失败是预期状态。让容器内的shell吞掉探测输出，
+    # 避免Windows PowerShell把Node的stderr升级为NativeCommandError并提前终止轮询。
+    & docker exec $RunnerCheckContainer sh -c "node /usr/local/bin/opencode-healthcheck.mjs >/dev/null 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+      $Healthy = $true
+      break
+    }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $Healthy) {
+    & docker logs $RunnerCheckContainer
+    throw "ARM64 OpenCode或Phase 2 runner健康检查失败"
+  }
+  Write-Host "ARM64 Node Phase 2 runner健康检查通过"
+} finally {
+  & docker rm -f $RunnerCheckContainer *> $null
+}
+
 if (Test-Path $OutputPath) {
   Remove-Item $OutputPath -Recurse -Force
 }
