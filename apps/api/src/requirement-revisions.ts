@@ -1,4 +1,5 @@
-import {BadRequestException, Controller, Get, Injectable, NotFoundException, Param, Query, Req, Res} from "@nestjs/common";
+import {BadRequestException, ConflictException, Controller, Get, Injectable, NotFoundException, Param, Query, Req, Res} from "@nestjs/common";
+import {Prisma} from "@prisma/client";
 import {createHash, randomUUID} from "node:crypto";
 import {cp, mkdir, readdir, readFile, rename, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
@@ -152,6 +153,8 @@ export class RequirementRevisionsService {
     private async ensureBaseline(projectId: string, userId?: string) {
         let baseline = await this.db.requirementRevision.findFirst({where: {projectId, kind: {in: ["GENERATED_BASELINE", "MIGRATED_BASELINE"]}}, orderBy: {sequence: "asc"}});
         if (baseline) return baseline;
+        const existing = await this.db.requirementRevision.findFirst({where: {projectId}, orderBy: {sequence: "asc"}});
+        if (existing) throw new ConflictException("项目已有发布版本但缺少需求基线，请先运行需求版本历史修复工具");
         const project = await this.db.project.findUnique({where: {id: projectId}});
         if (!project) throw new NotFoundException("项目不存在");
         if (project.status !== "READY_FOR_REVIEW") throw new BadRequestException("项目尚无可建立迁移基线的正式Phase 2版本");
@@ -189,6 +192,9 @@ export class RequirementRevisionsService {
             await rm(finalRoot, {recursive: true, force: true}).catch(() => undefined);
             const concurrent = await this.db.requirementRevision.findFirst({where: {projectId, kind: {in: ["GENERATED_BASELINE", "MIGRATED_BASELINE"]}}});
             if (concurrent) return concurrent;
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+                throw new ConflictException("需求基线创建冲突，请刷新后重试；若问题持续存在，请运行需求版本历史修复工具")
+            }
             throw error
         }
     }

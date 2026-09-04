@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "repair:requirement-history": "node dist/repair-requirement-history.js",
     "test": "vitest run"
   },
   "dependencies": {

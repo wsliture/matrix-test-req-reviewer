@@ -274,6 +274,24 @@ vi data/opencode-config/opencode.json
 
 部署数据保存在离线包目录下的 `data/`。详细说明见离线包中的 `README-OFFLINE.md`。
 
+### 需求版本历史冲突修复
+
+若变更分析接口报告 `RequirementRevision_projectId_sequence_key` 或 Prisma `P2002`，先停止 Worker，备份数据库和项目卷，再对目标项目执行只读检查：
+
+```bash
+docker compose stop worker
+docker compose run --rm worker npm --workspace @matrix/worker run repair:requirement-history -- <projectId>
+```
+
+确认输出显示项目为“单个 `PUBLISHED V1` 且无基线”，且编辑回滚备份与版本快照完整后，显式执行修复：
+
+```bash
+docker compose run --rm worker npm --workspace @matrix/worker run repair:requirement-history -- <projectId> --apply
+docker compose start worker
+```
+
+工具会把编辑前备份重建为迁移基线 V1、将当前编辑结果规范化为 V2，并输出安全备份目录。前置检查失败时不会修改数据；执行中失败会尝试自动回滚。若提示回滚失败，应保持服务停止并从安全备份恢复。
+
 ### 4. 一键升级且保留服务器数据
 
 将新版离线包解压到独立目录，不要覆盖旧部署目录，然后从新版目录运行：

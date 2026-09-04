@@ -4,7 +4,7 @@ import type {Pool} from "pg";
 import {cp, mkdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {indexProject} from "./indexing.js";
-import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
+import {assertRequirementBaselineForRebuild, createRequirementRevision, ensureRequirementBaselineForEdit, removeRequirementRevision} from "./requirement-revisions.js";
 
 const auth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
 const baseUrl = process.env.MATRIX_PHASE2_RUNNER_URL || "http://localhost:4097";
@@ -116,12 +116,16 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             const batch = row.operation === "batch";
             let applied: any;
             if (rebuildOnly) {
+                await assertRequirementBaselineForRebuild(db, row.projectId);
                 await db.query(`update "Phase2EditRun" set status='RUNNING',"startedAt"=coalesce("startedAt",now()),"finishedAt"=null,"errorMessage"=null,"currentStage"='resume_publish',progress=15 where id=$1`, [runId]);
                 backupPath = row.backupPath || "";
                 applied = typeof row.applyResult === "string" ? JSON.parse(row.applyResult) : row.applyResult;
                 if (!applied) throw new Error("缺少已保存编辑稿的发布上下文")
             } else {
                 await db.query(`update "Phase2EditRun" set status='RUNNING',"startedAt"=now(),"currentStage"='backup',progress=5 where id=$1`, [runId]);
+                await timed("baseline", () => ensureRequirementBaselineForEdit(db, {
+                    projectId: row.projectId, workspace: row.workspacePath, userId: row.userId
+                }));
                 const mutation = await call<{files?: string[]}>("/v1/phase2/editor/mutation-files", request);
                 backupPath = await timed("backup", () => backupPhase2Edit(row.workspacePath, runId, request, mutation.files || []));
                 await db.query(`update "Phase2EditRun" set "backupPath"=$1,"currentStage"='apply',progress=10 where id=$2`, [backupPath, runId]);

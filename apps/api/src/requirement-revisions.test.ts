@@ -1,8 +1,21 @@
-import {describe, expect, test} from "vitest";
+import {describe, expect, test, vi} from "vitest";
 import {calculateRequirementDiff, textSegments} from "./requirement-revisions.js";
+import {RequirementRevisionsService} from "./requirement-revisions.js";
+import {ConflictException} from "@nestjs/common";
 
 const node = (entityUid: string, businessId: string, content: unknown = {text: "old"}) => ({
     id: businessId, entityUid, businessId, nodeType: "requirement", number: businessId, title: "需求", parentId: "p", artifact: "functional-test-content.json", content, sourceRefs: ["S1"]
+});
+
+describe("RequirementRevisionsService baseline guard", () => {
+    test("returns conflict instead of creating a duplicate V1 when published history has no baseline", async () => {
+        const db: any = {requirementRevision: {
+            findFirst: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({id: "revision-1", sequence: 1, kind: "PUBLISHED"})
+        }};
+        const service = new RequirementRevisionsService(db);
+        await expect(service.list("project-1")).rejects.toBeInstanceOf(ConflictException);
+        expect(db.requirementRevision.create).toBeUndefined()
+    })
 });
 const section = (entityUid: string, artifact: string, number: string, content: unknown) => ({
     id: entityUid, entityUid, businessId: `${artifact}:${number}`, nodeType: "section", number,

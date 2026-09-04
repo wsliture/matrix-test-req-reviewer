@@ -77,8 +77,9 @@ function nodeChanges(before: any[], after: any[]) {
 }
 
 export async function createRequirementRevision(db: Pool, input: {
-    projectId: string; workspace: string; kind: "GENERATED_BASELINE" | "PUBLISHED";
+    projectId: string; workspace: string; kind: "GENERATED_BASELINE" | "MIGRATED_BASELINE" | "PUBLISHED";
     userId?: string; editRunId?: string; versionName?: string; sourceRevision?: string; resultRevision?: string;
+    repairExistingPublished?: boolean;
 }) {
     const client = await db.connect();
     let temp = "";
@@ -89,9 +90,16 @@ export async function createRequirementRevision(db: Pool, input: {
             const duplicate = await client.query(`select * from "RequirementRevision" where "editRunId"=$1`, [input.editRunId]);
             if (duplicate.rowCount) { await client.query("rollback"); return duplicate.rows[0] }
         }
+        if (input.kind.endsWith("BASELINE")) {
+            const baselineResult = await client.query(`select * from "RequirementRevision" where "projectId"=$1 and kind in ('GENERATED_BASELINE','MIGRATED_BASELINE') order by sequence limit 1`, [input.projectId]);
+            if (baselineResult.rowCount) { await client.query("rollback"); return baselineResult.rows[0] }
+        }
         const previousResult = await client.query(`select * from "RequirementRevision" where "projectId"=$1 and status='PUBLISHED' order by sequence desc limit 1`, [input.projectId]);
-        const previous = previousResult.rows[0];
-        if (input.kind === "GENERATED_BASELINE" && previous) { await client.query("rollback"); return previous }
+        let previous = previousResult.rows[0];
+        if (input.kind.endsWith("BASELINE") && previous) {
+            if (!input.repairExistingPublished) throw new Error("项目已有发布版本但缺少需求基线，请先运行需求版本历史修复工具");
+            previous = undefined
+        }
         const sequence = Number(previous?.sequence || 0) + 1, id = randomUUID();
         const revisionsRoot = path.resolve(input.workspace, ".matrix", "history", "revisions");
         temp = path.join(revisionsRoot, `.tmp-${id}`);
@@ -141,6 +149,17 @@ export async function createRequirementRevision(db: Pool, input: {
         if (temp) await rm(temp, {recursive: true, force: true}).catch(() => undefined);
         throw error
     } finally { client.release() }
+}
+
+export async function ensureRequirementBaselineForEdit(db: Pool, input: {
+    projectId: string; workspace: string; userId?: string;
+}) {
+    return createRequirementRevision(db, {...input, kind: "MIGRATED_BASELINE"})
+}
+
+export async function assertRequirementBaselineForRebuild(db: Pool, projectId: string) {
+    const result = await db.query(`select id from "RequirementRevision" where "projectId"=$1 and kind in ('GENERATED_BASELINE','MIGRATED_BASELINE') limit 1`, [projectId]);
+    if (!result.rowCount) throw new Error("编辑任务缺少需求基线，请先运行需求版本历史修复工具");
 }
 
 export async function removeRequirementRevision(db: Pool, revisionId: string) {
