@@ -149,7 +149,9 @@ function Shell({children, backTo, actions, beforeLeave}: { children: React.React
     const nav = useNavigate(), qc = useQueryClient();
     return <Layout className="shell"><Header className="header"><b>Matrix测试需求管理</b>{backTo &&
         <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>返回项目</Button>}<span
-        className="grow"/>{actions}<Button
+        className="grow"/>{actions}<Button ghost icon={<DownloadOutlined/>}
+        href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
+        download="Matrix-Req-Manager用户使用手册.pdf">下载使用手册</Button><Button
         ghost icon={<LogoutOutlined/>} onClick={async () => {
         if (beforeLeave && !beforeLeave()) return;
         await api("/auth/logout", {method: "POST"});
@@ -1532,5 +1534,5 @@ export function App() {
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
         path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/requirement-diff" element={me.data ? <RequirementDiffPage/> : <Navigate to="/login"/>}/></Routes></>
+        path="/projects/:id/requirement-diff" element={me.data ? <Shell><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes></>
 }
