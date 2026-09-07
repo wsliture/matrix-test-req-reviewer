@@ -8,7 +8,8 @@ export class ApiError extends Error {
 export type SessionStatus = "ready" | "recovering" | "expired";
 const AUTHENTICATED_KEY = "matrix-requirements-authenticated";
 const EXPIRED_NOTICE_KEY = "matrix-requirements-session-expired";
-let refreshPromise: Promise<CurrentUser> | undefined, sessionStatus: SessionStatus = "ready";
+let refreshPromise: Promise<CurrentUser> | undefined, refreshController: AbortController | undefined,
+    authenticationGeneration = 0, sessionStatus: SessionStatus = "ready";
 const sessionListeners = new Set<(status: SessionStatus) => void>();
 
 function setSessionStatus(status: SessionStatus) {
@@ -24,19 +25,41 @@ export function subscribeSessionStatus(listener: (status: SessionStatus) => void
     }
 }
 
-export function markAuthenticated() {
-    sessionStorage.setItem(AUTHENTICATED_KEY, "1");
-    sessionStorage.removeItem(EXPIRED_NOTICE_KEY);
-    setSessionStatus("ready")
+function invalidateRecovery() {
+    authenticationGeneration += 1;
+    refreshController?.abort();
+    refreshController = undefined;
+    refreshPromise = undefined;
+    return authenticationGeneration
 }
 
-export function clearAuthenticated() {
+export function beginAuthenticationAttempt() {
+    const generation = invalidateRecovery();
+    setSessionStatus("ready");
+    return generation
+}
+
+export function isAuthenticationAttemptCurrent(generation: number) {
+    return generation === authenticationGeneration
+}
+
+export function markAuthenticated(generation = authenticationGeneration) {
+    if (!isAuthenticationAttemptCurrent(generation)) return false;
+    sessionStorage.setItem(AUTHENTICATED_KEY, "1");
+    sessionStorage.removeItem(EXPIRED_NOTICE_KEY);
+    setSessionStatus("ready");
+    return true
+}
+
+export function clearAuthenticated(generation = authenticationGeneration) {
+    if (!isAuthenticationAttemptCurrent(generation)) return false;
     const wasAuthenticated = sessionStorage.getItem(AUTHENTICATED_KEY) === "1";
     if (wasAuthenticated) sessionStorage.setItem(EXPIRED_NOTICE_KEY, "1");
     sessionStorage.removeItem(AUTHENTICATED_KEY);
     // 首次打开登录页时 /auth/me 和 /auth/refresh 返回401属于正常匿名状态，
     // 不能标记为会话过期，否则第一次登录成功后残留的expired状态会清空me缓存并闪回登录页。
-    setSessionStatus(wasAuthenticated ? "expired" : "ready")
+    setSessionStatus(wasAuthenticated ? "expired" : "ready");
+    return true
 }
 
 export function hasActiveAuthenticationMarker() {
@@ -44,6 +67,7 @@ export function hasActiveAuthenticationMarker() {
 }
 
 export function resetAuthenticationState() {
+    invalidateRecovery();
     sessionStorage.removeItem(AUTHENTICATED_KEY);
     sessionStorage.removeItem(EXPIRED_NOTICE_KEY);
     setSessionStatus("ready")
@@ -58,64 +82,119 @@ async function parseError(response: Response) {
     return new ApiError(details?.message || response.statusText, response.status, details || undefined)
 }
 
-async function performRefresh() {
-    const response = await fetch("/api/auth/refresh", {method: "POST", credentials: "include"});
-    if (response.status === 401 || response.status === 403) {
-        clearAuthenticated();
-        throw await parseError(response)
-    }
-    if (!response.ok) throw await parseError(response);
-    const user = await response.json() as CurrentUser;
-    markAuthenticated();
-    return user
+function assertCurrentRecovery(generation: number, signal: AbortSignal) {
+    if (signal.aborted || !isAuthenticationAttemptCurrent(generation)) throw new DOMException("Authentication recovery superseded", "AbortError")
 }
 
-async function refreshUnderBrowserLock() {
-    const locks = (navigator as Navigator & {
-        locks?: { request<T>(name: string, callback: () => Promise<T>): Promise<T> }
-    }).locks;
-    if (!locks) return performRefresh();
-    return locks.request("matrix-requirements-session-refresh", async () => {
-        const current = await fetch("/api/auth/me", {credentials: "include"}).catch(() => undefined);
-        if (current?.ok) {
-            const user = await current.json() as CurrentUser;
-            markAuthenticated();
-            return user
+function waitForRetry(delay: number, signal: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(done, delay);
+        function done() {
+            signal.removeEventListener("abort", aborted);
+            resolve()
         }
-        return performRefresh()
+        function aborted() {
+            window.clearTimeout(timer);
+            reject(new DOMException("Authentication recovery aborted", "AbortError"))
+        }
+        signal.addEventListener("abort", aborted, {once: true})
     })
 }
 
-export function recoverSession(): Promise<CurrentUser> {
+function waitUntilOnline(signal: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        function online() {
+            signal.removeEventListener("abort", aborted);
+            resolve()
+        }
+        function aborted() {
+            window.removeEventListener("online", online);
+            reject(new DOMException("Authentication recovery aborted", "AbortError"))
+        }
+        window.addEventListener("online", online, {once: true});
+        signal.addEventListener("abort", aborted, {once: true})
+    })
+}
+
+async function performRefresh(generation: number, signal: AbortSignal) {
+    const response = await fetch("/api/auth/refresh", {method: "POST", credentials: "include", signal});
+    if (response.status === 401 || response.status === 403) {
+        const error = await parseError(response);
+        assertCurrentRecovery(generation, signal);
+        clearAuthenticated(generation);
+        throw error
+    }
+    if (!response.ok) throw await parseError(response);
+    const user = await response.json() as CurrentUser;
+    assertCurrentRecovery(generation, signal);
+    markAuthenticated(generation);
+    return user
+}
+
+async function refreshUnderBrowserLock(generation: number, signal: AbortSignal) {
+    const locks = (navigator as Navigator & {
+        locks?: { request<T>(name: string, callback: () => Promise<T>): Promise<T> }
+    }).locks;
+    if (!locks) return performRefresh(generation, signal);
+    return locks.request("matrix-requirements-session-refresh", async () => {
+        assertCurrentRecovery(generation, signal);
+        const current = await fetch("/api/auth/me", {credentials: "include", signal}).catch(error => {
+            if (signal.aborted) throw error;
+            return undefined
+        });
+        if (current?.ok) {
+            const user = await current.json() as CurrentUser;
+            assertCurrentRecovery(generation, signal);
+            markAuthenticated(generation);
+            return user
+        }
+        return performRefresh(generation, signal)
+    })
+}
+
+export function recoverSession(signal?: AbortSignal): Promise<CurrentUser> {
     if (refreshPromise) return refreshPromise;
-    refreshPromise = (async () => {
+    const generation = authenticationGeneration, controller = new AbortController();
+    refreshController = controller;
+    const abortFromCaller = () => controller.abort(signal?.reason);
+    if (signal?.aborted) controller.abort(signal.reason);
+    else signal?.addEventListener("abort", abortFromCaller, {once: true});
+    const operation = (async () => {
         let attempt = 0;
         while (true) {
             try {
-                const user = await refreshUnderBrowserLock();
+                assertCurrentRecovery(generation, controller.signal);
+                const user = await refreshUnderBrowserLock(generation, controller.signal);
+                assertCurrentRecovery(generation, controller.signal);
                 setSessionStatus("ready");
                 return user
             } catch (error) {
+                if (controller.signal.aborted || !isAuthenticationAttemptCurrent(generation) || error instanceof DOMException && error.name === "AbortError") throw error;
                 if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw error;
                 setSessionStatus("recovering");
                 if (!navigator.onLine) {
-                    await new Promise<void>(resolve => window.addEventListener("online", () => resolve(), {once: true}))
+                    await waitUntilOnline(controller.signal)
                 } else {
                     const waits = [1000, 2000, 5000, 10000, 15000];
-                    await new Promise(resolve => setTimeout(resolve, waits[Math.min(attempt++, waits.length - 1)]))
+                    await waitForRetry(waits[Math.min(attempt++, waits.length - 1)], controller.signal)
                 }
             }
         }
-    })().finally(() => {
-        refreshPromise = undefined
+    })();
+    const shared = operation.finally(() => {
+        signal?.removeEventListener("abort", abortFromCaller);
+        if (refreshPromise === shared) refreshPromise = undefined;
+        if (refreshController === controller) refreshController = undefined
     });
-    return refreshPromise
+    refreshPromise = shared;
+    return shared
 }
 
 export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true) {
     const response = await fetch(input, {...init, credentials: "include"});
     if (response.status !== 401 || !retry) return response;
-    await recoverSession();
+    await recoverSession(init.signal || undefined);
+    init.signal?.throwIfAborted();
     return fetch(input, {...init, credentials: "include"})
 }
 

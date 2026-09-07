@@ -58,10 +58,12 @@ import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {
     api,
     ApiError,
+    beginAuthenticationAttempt,
     resetAuthenticationState,
     downloadApi,
     hasActiveAuthenticationMarker,
     hadAuthenticatedSession,
+    isAuthenticationAttemptCurrent,
     markAuthenticated,
     recoverSession,
     type CurrentUser,
@@ -125,9 +127,13 @@ function Login() {
             username: string,
             password: string,
             rememberMe: boolean
-        }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}, false), onSuccess: async user => {
+        }) => {
+            const generation = beginAuthenticationAttempt();
+            return api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}, false)
+                .then(user => ({user, generation}))
+        }, onSuccess: async ({user, generation}) => {
             await qc.cancelQueries({queryKey: ["me"]});
-            markAuthenticated();
+            if (!isAuthenticationAttemptCurrent(generation) || !markAuthenticated(generation)) return;
             qc.setQueryData(["me"], user);
             nav("/", {replace: true})
         }
@@ -1501,7 +1507,7 @@ function Evaluation({scores, setScores, comment, setComment}: {
 
 export function App() {
     const qc = useQueryClient(), [sessionStatus, setSessionStatus] = useState<SessionStatus>("ready");
-    const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false});
+    const me = useQuery({queryKey: ["me"], queryFn: ({signal}) => api<CurrentUser>("/auth/me", {signal}), retry: false});
     useEffect(() => subscribeSessionStatus(setSessionStatus), []);
     useEffect(() => {
         // 登录成功会同步写入认证标记；即使React队列里仍残留一次旧的expired通知，
