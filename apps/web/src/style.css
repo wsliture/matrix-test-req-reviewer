@@ -693,11 +693,9 @@ html, body, #root {
 }
 .phase2-version-name-form { display: grid; gap: 10px; }
 .phase2-version-name-form p { margin: 0; color: #595959; }
-.revision-select { min-width: 260px; }
 .revision-option { display: flex; min-width: 0; flex-direction: column; line-height: 1.35; overflow: hidden; }
 .revision-option strong, .revision-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .revision-option small { color: #8c8c8c; font-size: 12px; }
-.requirement-diff-header .revision-select .ant-select-selector { min-height: 48px; align-items: center; }
 .diff-pane-title { display: flex; min-height: 52px; flex-direction: column; justify-content: center; }
 .diff-pane-title small { margin-top: 2px; color: #595959; font-size: 12px; font-weight: 400; }
 .requirement-diff-page .diff-reference-delete { background: #fff1f0; text-decoration-color: #cf1322; }
@@ -1875,19 +1873,65 @@ html, body, #root {
 .requirement-diff-header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 18px;
     padding: 12px 18px;
     background: #10243e;
-    color: #fff
+    color: #fff;
+    box-sizing: border-box
 }
 
 .requirement-diff-header h2 {
     margin: 0;
-    margin-right: auto
+    margin-right: auto;
+    white-space: nowrap
 }
 
-.revision-select {
-    width: 180px
+.requirement-diff-actions {
+    min-width: 0;
+    justify-content: flex-end
+}
+
+.requirement-diff-header .revision-select {
+    width: clamp(220px, 18vw, 300px);
+    height: 48px
+}
+
+.requirement-diff-header .revision-select .ant-select-selector {
+    height: 100%;
+    padding: 4px 34px 4px 12px;
+    align-items: center
+}
+
+.requirement-diff-header .revision-select .ant-select-selection-item {
+    min-width: 0;
+    display: flex;
+    align-items: center
+}
+
+.requirement-diff-header .revision-option {
+    width: 100%
+}
+
+.revision-swap {
+    flex: none;
+    padding: 8px 2px;
+    color: #d6e4ff;
+    cursor: pointer;
+    transition: color .2s ease, transform .2s ease
+}
+
+.revision-swap:hover {
+    color: #fff;
+    transform: rotate(180deg)
+}
+
+@media (max-width: 1180px) {
+    .requirement-diff-actions {
+        width: 100%;
+        margin-left: 0;
+        justify-content: flex-start
+    }
 }
 
 .requirement-diff-toolbar {

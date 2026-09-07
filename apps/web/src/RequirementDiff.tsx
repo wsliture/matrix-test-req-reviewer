@@ -101,7 +101,7 @@ export function RequirementDiffPage() {
     if (revisions.error) return <Alert type="error" message="需求版本加载失败" description={revisions.error.message}/>;
     return <div className="requirement-diff-page">
         <header className="requirement-diff-header"><Button icon={<ArrowLeftOutlined/>} onClick={() => navigate(`/projects/${id}/review`)}>返回评审</Button><h2>第三方测试需求变更分析</h2>
-            <Space wrap><Select value={actualFrom} options={options} onChange={value => {setFromId(value); setSelectedUid(undefined)}} className="revision-select"/><SwapOutlined onClick={() => {setFromId(actualTo); setToId(actualFrom); setSelectedUid(undefined)}}/><Select value={actualTo} options={options} onChange={value => {setToId(value); setSelectedUid(undefined)}} className="revision-select"/>
+            <Space className="requirement-diff-actions" size={12} wrap><Select value={actualFrom} options={options} onChange={value => {setFromId(value); setSelectedUid(undefined)}} className="revision-select"/><SwapOutlined className="revision-swap" onClick={() => {setFromId(actualTo); setToId(actualFrom); setSelectedUid(undefined)}}/><Select value={actualTo} options={options} onChange={value => {setToId(value); setSelectedUid(undefined)}} className="revision-select"/>
                 <Button icon={<DownloadOutlined/>} onClick={() => download(actualTo)}>下载右侧版本</Button></Space></header>
         {diff.data?.from.kind === "MIGRATED_BASELINE" && <Alert type="warning" showIcon message="左侧为迁移基线，不一定是项目最初生成版本"/>}
         <section className="requirement-diff-toolbar"><Space wrap><Input.Search placeholder="搜索TR编号或标题" allowClear value={search} onChange={event => setSearch(event.target.value)} className="diff-search"/>
