@@ -130,7 +130,7 @@ function Login() {
             nav(safeReturnTo((location.state as {returnTo?: unknown} | null)?.returnTo), {replace: true})
         }
     });
-    return <div className="login"><Card title="测试需求管理工具" style={{width: 420}}><Form layout="vertical"
+    return <div className="login"><Card title="测试需求管理工具"><Form layout="vertical"
                                                                                             onFinish={v => login.mutate(v)}><Form.Item
         name="username" label="用户名" rules={[{required: true}]}><Input/></Form.Item><Form.Item name="password"
                                                                                                  label="密码"

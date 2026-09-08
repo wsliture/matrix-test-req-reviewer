@@ -32,10 +32,19 @@ html, body, #root {
 }
 
 .login {
-    height: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
+    box-sizing: border-box;
+    padding: 24px;
     display: grid;
     place-items: center;
-    background: linear-gradient(135deg, #17365f, #287dcc)
+    background: #e6eff9 url("./assets/matrix-requirements-login.png") center / cover no-repeat
+}
+
+.login > .ant-card {
+    width: 420px;
+    max-width: 100%;
+    box-shadow: 0 16px 48px rgba(38, 83, 140, .16)
 }
 
 .session-expired {
