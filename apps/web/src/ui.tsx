@@ -40,6 +40,7 @@ import {
     DeleteOutlined,
     DownloadOutlined,
     ExportOutlined,
+    InfoCircleOutlined,
     EditOutlined,
     EyeOutlined,
     SaveOutlined,
@@ -69,6 +70,7 @@ import {
     type CurrentUser,
     type EditTimeSummary,
     type Phase2Run,
+    type TokenUsage,
     type Phase2EditRun,
     type Phase2EditBinding,
     type Phase2InlineDescriptor,
@@ -87,6 +89,7 @@ import {
 } from "./api";
 import {appendEditTimeOutbox, EditingTimeTracker, editTimeOutboxKey, formatEditDuration, readEditTimeOutbox, removeEditTimeOutbox} from "./editTime";
 import {DocxPreview} from "./DocxPreview";
+import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonCachedTokens} from "./runMetrics";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
 
@@ -430,8 +433,49 @@ function eventText(item: RunEvent) {
     return item.type
 }
 
+function RunMetrics({run}: {run?: Phase2Run}) {
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        if (!run?.startedAt || run.finishedAt || !["RUNNING", "QUEUED"].includes(run.status)) return;
+        const timer = window.setInterval(() => setTick(value => value + 1), 1000);
+        return () => window.clearInterval(timer)
+    }, [run?.startedAt, run?.finishedAt, run?.status]);
+    const usage = run?.tokenUsage, queued = run?.status === "QUEUED",
+        nonCached = usage ? nonCachedTokens(usage) : undefined,
+        hitRate = usage ? cacheHitRate(usage) : undefined;
+    const metric = (label: string, value: number) => <span>{label} <Tooltip
+        title={Math.round(value).toLocaleString("en-US")}>{formatTokenCount(value)}</Tooltip></span>;
+    return <div className="run-metrics">
+        <Tooltip title={<div>累计处理 Token 包含每轮请求重复使用的缓存上下文，不等于模型供应商
+            控制台的计费 Token，最终费用以供应商账单为准。</div>}><InfoCircleOutlined
+            className="run-metrics-info" aria-label="Token 统计口径说明"/></Tooltip>
+        <div className="run-metric-primary"><div className="run-metric-item"><span>已运行时间</span><strong>{formatElapsed(elapsedMilliseconds(run?.startedAt,
+            run?.finishedAt))}</strong></div><Tooltip title={usage ? <div className="run-metric-tooltip">
+                <div>输入：{Math.round(usage.input).toLocaleString("en-US")}</div>
+                <div>输出：{Math.round(usage.output).toLocaleString("en-US")}</div>
+                <div>推理：{Math.round(usage.reasoning).toLocaleString("en-US")}</div>
+                <div>计算公式：输入 + 输出 + 推理</div>
+                <div>该值不等同于供应商后台计费 Token。</div>
+            </div> : undefined}><div className="run-metric-item"><span>非缓存 Token</span><strong>
+                {nonCached !== undefined ? formatTokenCount(nonCached) : queued ? "0" : "暂无统计"}</strong></div></Tooltip>
+            <Tooltip title={usage ? <div className="run-metric-tooltip">
+                <div>缓存命中：{Math.round(usage.cacheRead).toLocaleString("en-US")}</div>
+                <div>累计处理：{Math.round(usage.total).toLocaleString("en-US")}</div>
+                <div>计算公式：缓存命中 ÷（输入 + 缓存命中）</div>
+                <div>缓存命中通常按更低价格计费。</div>
+            </div> : undefined}><div className="run-metric-item"><span>缓存命中率</span><strong>
+                {hitRate !== undefined ? `${hitRate.toFixed(1)}%` : queued ? "0.0%" : "暂无统计"}</strong></div></Tooltip>
+            {usage && !usage.complete && <Tag color="warning">统计可能不完整</Tag>}</div>
+        {usage && <div className="run-token-details">{metric("输入", usage.input)}<b>·</b>{metric("输出", usage.output)}
+            <b>·</b>{metric("推理", usage.reasoning)}<b>·</b>{metric("缓存命中", usage.cacheRead)}
+            {usage.cacheWrite > 0 && <><b>·</b>{metric("缓存写入", usage.cacheWrite)}</>}</div>}
+    </div>
+}
+
 function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
-    const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务");
+    const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务"),
+        [runState, setRunState] = useState<Phase2Run | undefined>(run);
+    useEffect(() => setRunState(run), [run?.id, run?.status, run?.startedAt, run?.finishedAt, run?.tokenUsage]);
     useEffect(() => {
         setEvents([]);
         if (!run) return;
@@ -463,6 +507,11 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
                 }
                 setConnection("实时日志已连接")
             });
+            source.addEventListener("run-state", raw => {
+                const state = JSON.parse((raw as MessageEvent).data) as Partial<Phase2Run> | null;
+                if (state) setRunState(previous => ({...(previous || run), ...state} as Phase2Run));
+                setConnection("实时日志已连接")
+            });
             source.onerror = () => {
                 source?.close();
                 setConnection("连接中断，正在恢复登录状态");
@@ -478,12 +527,12 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
             if (reconnectTimer) window.clearTimeout(reconnectTimer)
         }
     }, [run?.id, run?.status]);
-    return <Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
+    return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
         {events.length ? <List size="small" dataSource={events} renderItem={item => <List.Item
             className={`run-log ${item.type === "run.failed" ? "error" : item.type.endsWith("succeeded") || item.type === "stage.completed" ? "success" : "info"}`}>
             <span className="run-log-time">{localMinute(item.createdAt)}</span><span>{eventText(item)}</span>
         </List.Item>}/> : <div className="run-log-empty">正在等待任务启动...</div>}
-    </Card>
+    </Card></>
 }
 
 function ChapterStatus({project, run}: { project: Project; run?: Phase2Run }) {
@@ -537,9 +586,7 @@ function ProjectPage() {
         <Card title="Phase 2测试需求生成"><Progress percent={latest?.progress || 0}
                                                     status={latest?.status === "FAILED" ? "exception" : running ? "active" : "normal"}/>
             <p>当前阶段：{latest?.status === "CANCELLED" ? "已终止" : latest?.currentStage ? stageName(latest.currentStage) : running ? "任务启动中" : latest?.status === "FAILED" ? "生成失败" : "尚未开始"}</p>
-            {latest?.errorMessage &&
-                <Alert type="error" showIcon message="测试需求生成失败" description={latest.errorMessage}/>}<Button
-                type="primary"
+            <Space className="phase2-run-actions"><Button type="primary"
                 loading={run.isPending} disabled={running}
                 onClick={() => run.mutate()}>{running ? "正在生成测试需求" : "开始生成测试需求"}</Button>
             {running && latest && <Popconfirm title="终止测试需求生成？"
@@ -547,10 +594,14 @@ function ProjectPage() {
                                               okText="终止" cancelText="继续运行" okButtonProps={{danger: true}}
                                               onConfirm={() => cancel.mutate(latest.id)}><Button danger
                                                                                                  icon={<StopOutlined/>}
-                                                                                                 loading={cancel.isPending}>终止生成</Button></Popconfirm>}
-            {latest?.status === "CANCELLED" && <Alert type="info" showIcon message="测试需求生成已终止"/>}
+                                                                                                 loading={cancel.isPending}>终止生成</Button></Popconfirm>}</Space>
+            {latest?.errorMessage && <Alert className="phase2-run-feedback" type="error" showIcon
+                message="测试需求生成失败" description={latest.errorMessage}/>}
+            {latest?.status === "CANCELLED" && <Alert className="phase2-run-feedback" type="info" showIcon
+                message="测试需求生成已终止"/>}
             {(run.error || cancel.error) &&
-                <Alert type="error" showIcon message={(run.error || cancel.error)?.message}/>}<RunLogs run={latest}
+                <Alert className="phase2-run-feedback" type="error" showIcon
+                    message={(run.error || cancel.error)?.message}/>}<RunLogs run={latest}
                                                                                                        onEvents={() => qc.invalidateQueries({queryKey: ["project", id]})}/>
         </Card></Content></Shell>
 }

@@ -344,6 +344,8 @@ export type EditTimeSummary = {myDurationMs: number; projectDurationMs: number;
 export type MissingReview = { id: string; number: string; title: string };
 
 export type RunEvent = { id: string; type: string; payload: Record<string, unknown>; createdAt: string };
+export type TokenUsage = {input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number;
+    total: number; complete: boolean};
 export type Phase2Run = {
     id: string;
     status: string;
@@ -353,6 +355,8 @@ export type Phase2Run = {
     errorMessage?: string;
     startedAt?: string;
     finishedAt?: string;
+    tokenUsage?: TokenUsage | null;
+    usageUpdatedAt?: string | null;
     events?: RunEvent[]
 };
 export type EditorField = {key: string; label: string; type: "text" | "json" | "source_refs"; required?: boolean};

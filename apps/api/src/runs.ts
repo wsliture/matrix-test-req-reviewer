@@ -1,7 +1,7 @@
 import {ConflictException, Controller, Get, Injectable, MessageEvent, Param, Post, Sse} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
-import {interval, map, Observable, startWith, switchMap} from "rxjs";
+import {interval, map, merge, Observable, startWith, switchMap} from "rxjs";
 import {PrismaService} from "./prisma.js";
 import {createOpencodeClient} from "@opencode-ai/sdk/v2";
 
@@ -12,6 +12,38 @@ const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxR
         baseUrl: process.env.OPENCODE_URL || "http://localhost:4096",
         headers: {Authorization: `Basic ${auth}`}
     });
+
+type TokenUsage = {input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number;
+    total: number; complete: boolean};
+
+function normalizeTokens(tokens: any): TokenUsage | undefined {
+    const values = [tokens?.input, tokens?.output, tokens?.reasoning, tokens?.cache?.read, tokens?.cache?.write];
+    if (values.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) return undefined;
+    const [input, output, reasoning, cacheRead, cacheWrite] = values as number[];
+    return {input, output, reasoning, cacheRead, cacheWrite,
+        total: input + output + reasoning + cacheRead + cacheWrite, complete: true}
+}
+
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+    const input = left.input + right.input, output = left.output + right.output,
+        reasoning = left.reasoning + right.reasoning, cacheRead = left.cacheRead + right.cacheRead,
+        cacheWrite = left.cacheWrite + right.cacheWrite;
+    return {input, output, reasoning, cacheRead, cacheWrite,
+        total: input + output + reasoning + cacheRead + cacheWrite, complete: left.complete && right.complete}
+}
+
+async function collectSessionUsage(sessionID: string, directory: string): Promise<TokenUsage> {
+    let result: TokenUsage = {input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0, complete: true};
+    const messages = (await opencode.session.messages({sessionID, directory})).data || [];
+    for (const message of messages) {
+        if (message.info.role !== "assistant") continue;
+        const usage = normalizeTokens(message.info.tokens);
+        if (usage) result = addUsage(result, usage); else result.complete = false
+    }
+    const children = (await opencode.session.children({sessionID, directory})).data || [];
+    for (const child of children) result = addUsage(result, await collectSessionUsage(child.id, directory));
+    return result
+}
 
 @Injectable()
 export class RunsService {
@@ -45,9 +77,21 @@ export class RunsService {
     async cancel(id: string) {
         const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}, include: {project: true}});
         if (!(["QUEUED", "RUNNING"] as string[]).includes(run.status)) throw new ConflictException("任务已经结束，无法终止");
+        let finalUsage: TokenUsage | undefined;
+        if (run.opencodeSessionId) {
+            try {
+                const collected = await collectSessionUsage(run.opencodeSessionId, run.project.workspacePath);
+                const existing = run.tokenUsage as TokenUsage | null;
+                finalUsage = existing && existing.total > collected.total ? existing : collected
+            } catch {
+                const existing = run.tokenUsage as TokenUsage | null;
+                if (existing) finalUsage = {...existing, complete: false}
+            }
+        }
         const updated = await this.db.phase2Run.update({
             where: {id},
-            data: {status: "CANCELLED", finishedAt: new Date(), errorMessage: null}
+            data: {status: "CANCELLED", finishedAt: new Date(), errorMessage: null,
+                ...(finalUsage ? {tokenUsage: finalUsage, usageUpdatedAt: new Date()} : {})}
         });
         await this.db.runEvent.create({data: {runId: id, type: "run.cancelled", payload: {}}});
         const job = await queue.getJob(id), state = await job?.getState();
@@ -68,15 +112,20 @@ export class RunsService {
 
     events(id: string): Observable<MessageEvent> {
         let cursor = BigInt(0);
-        return interval(1000).pipe(startWith(0), switchMap(() => this.db.runEvent.findMany({
+        const events = interval(1000).pipe(startWith(0), switchMap(() => this.db.runEvent.findMany({
             where: {
                 runId: id,
                 id: {gt: cursor}
             }, orderBy: {id: "asc"}
         })), map(rows => {
             if (rows.length) cursor = rows.at(-1)!.id;
-            return {type: "run-events", data: rows.map(row => ({...row, id: row.id.toString()}))}
-        }))
+            return {type: "run-events", data: rows.map(row => ({...row, id: row.id.toString()}))} as MessageEvent
+        }));
+        const state = interval(1000).pipe(startWith(0), switchMap(() => this.db.phase2Run.findUnique({
+            where: {id}, select: {id: true, status: true, startedAt: true, finishedAt: true,
+                tokenUsage: true, usageUpdatedAt: true}
+        })), map(run => ({type: "run-state", data: run || undefined}) as MessageEvent));
+        return merge(events, state)
     }
 }
 

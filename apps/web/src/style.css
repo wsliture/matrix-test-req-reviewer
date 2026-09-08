@@ -2202,3 +2202,83 @@ html, body, #root {
 .requirement-diff-page .diff-trace-delete {
     font-weight: 600
 }
+.phase2-run-actions {
+    display: flex
+}
+
+.phase2-run-feedback {
+    margin-top: 12px
+}
+
+.run-metrics {
+    position: relative;
+    margin: 12px 0 16px;
+    padding: 12px 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fafcff
+}
+
+.run-metric-primary, .run-token-details {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 24px
+}
+
+.run-metric-primary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+    padding-right: 28px
+}
+
+.run-metric-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    cursor: default
+}
+
+.run-metric-item > span {
+    color: #5f6b7a;
+    font-size: 13px
+}
+
+.run-metrics-info {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    color: #8c8c8c;
+    cursor: help
+}
+
+.run-metric-primary strong {
+    color: #1677ff;
+    font-size: 18px
+}
+
+.run-metric-tooltip > div + div {
+    margin-top: 3px
+}
+
+.run-metric-primary .ant-tag {
+    margin-left: 8px
+}
+
+.run-token-details {
+    margin-top: 8px;
+    color: #5f6b7a;
+    font-size: 13px;
+    gap: 6px
+}
+
+.run-token-details b {
+    color: #b8c0cc;
+    font-weight: 400
+}
+
+@media (max-width: 720px) {
+    .run-metric-primary {
+        grid-template-columns: 1fr
+    }
+}

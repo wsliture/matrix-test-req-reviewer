@@ -175,6 +175,8 @@ model Phase2Run {
   errorMessage String?
   startedAt DateTime?
   finishedAt DateTime?
+  tokenUsage Json?
+  usageUpdatedAt DateTime?
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
   events RunEvent[]
   @@index([projectId,status])

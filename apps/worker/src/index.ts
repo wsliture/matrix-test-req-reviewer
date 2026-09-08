@@ -9,6 +9,7 @@ import {missingCompletionStages, parseToolOutput, progressOf} from "./progress.j
 import {indexProject} from "./indexing.js";
 import {startPhase2EditWorker} from "./phase2-edit.js";
 import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
+import {addUsage, emptyTokenUsage, normalizeTokens, SessionUsageTracker, type TokenUsage} from "./token-usage.js";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null}),
     db = new Pool({connectionString: process.env.DATABASE_URL}),
@@ -56,7 +57,8 @@ async function update(runId: string, data: {
     progress?: number;
     session?: string;
     error?: string;
-    completed?: Set<string>
+    completed?: Set<string>;
+    tokenUsage?: TokenUsage
 }) {
     const fields: string[] = [], values: unknown[] = [];
     const add = (column: string, value: unknown) => {
@@ -69,6 +71,10 @@ async function update(runId: string, data: {
     if (data.session) add("opencodeSessionId", data.session);
     if (data.error) add("errorMessage", data.error);
     if (data.completed) add("completedStages", JSON.stringify([...data.completed]));
+    if (data.tokenUsage) {
+        add("tokenUsage", JSON.stringify(data.tokenUsage));
+        add("usageUpdatedAt", new Date())
+    }
     if (data.status === "RUNNING") add("startedAt", new Date());
     if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "")) add("finishedAt", new Date());
     values.push(runId);
@@ -78,7 +84,7 @@ async function update(runId: string, data: {
 }
 
 async function claim(runId: string) {
-    const result = await db.query('update "Phase2Run" set status=$1,"startedAt"=$2 where id=$3 and status=$4 returning id', ["RUNNING", new Date(), runId, "QUEUED"]);
+    const result = await db.query('update "Phase2Run" set status=$1,"startedAt"=coalesce("startedAt",$2) where id=$3 and status=$4 returning id', ["RUNNING", new Date(), runId, "QUEUED"]);
     return result.rowCount === 1
 }
 
@@ -88,9 +94,9 @@ async function cancelled(runId: string) {
 }
 
 async function project(runId: string) {
-    const result = await db.query('select p.id,p."workspacePath",r."completedStages" from "Project" p join "Phase2Run" r on r."projectId"=p.id where r.id=$1', [runId]);
+    const result = await db.query('select p.id,p."workspacePath",r."completedStages",r."tokenUsage" from "Project" p join "Phase2Run" r on r."projectId"=p.id where r.id=$1', [runId]);
     if (!result.rows[0]) throw new Error("任务项目不存在");
-    return result.rows[0] as { id: string; workspacePath: string; completedStages: unknown }
+    return result.rows[0] as { id: string; workspacePath: string; completedStages: unknown; tokenUsage: TokenUsage | null }
 }
 
 async function verify(workspace: string) {
@@ -110,17 +116,72 @@ async function verifyStageArtifact(workspace: string, stage: string) {
     }
 }
 
-async function consume(runId: string, sessionId: string, directory: string, completed: Set<string>, signal: AbortSignal) {
+async function consume(runId: string, sessionId: string, directory: string, completed: Set<string>,
+                       tracker: SessionUsageTracker, signal: AbortSignal) {
     const subscription = await client.event.subscribe({directory});
+    let dirty = false, lastFlush = 0, flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushUsage = async (force = false) => {
+        if (force && flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = undefined
+        }
+        if (!dirty && !force) return;
+        const now = Date.now();
+        if (!force && now - lastFlush < 1000) {
+            if (!flushTimer) flushTimer = setTimeout(() => {
+                flushTimer = undefined;
+                void flushUsage(true).catch(() => tracker.markIncomplete())
+            }, 1000 - (now - lastFlush));
+            return
+        }
+        if (flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = undefined
+        }
+        await update(runId, {tokenUsage: tracker.snapshot()});
+        dirty = false;
+        lastFlush = now
+    };
     for await(const item of subscription.stream) {
-        if (signal.aborted) return;
+        if (signal.aborted) {
+            await flushUsage(true);
+            return
+        }
         const e = item as Event;
-        if (e.type === "message.part.updated") {
+        if (e.type === "session.created") {
+            tracker.trackSession(e.properties.info.id, e.properties.info.parentID)
+        } else if (e.type === "message.updated") {
+            const message = e.properties.info;
+            if (message.role === "assistant" && tracker.isTracked(message.sessionID)) {
+                dirty = tracker.setMessage(message.sessionID, message.id, message.tokens) || dirty;
+                await flushUsage()
+            }
+        } else if (e.type === "message.part.updated") {
             const part = e.properties.part;
             if (part.type !== "tool" || part.sessionID !== sessionId || part.tool !== "filldata_phase2_workflow") continue;
             await handleTool(runId, part, completed, directory)
-        } else if (e.type === "session.error" && e.properties.sessionID === sessionId) throw new Error(JSON.stringify(e.properties.error || "OpenCode会话错误")); else if (e.type === "session.idle" && e.properties.sessionID === sessionId) return
+        } else if (e.type === "session.error" && e.properties.sessionID === sessionId) {
+            await flushUsage(true);
+            throw new Error(JSON.stringify(e.properties.error || "OpenCode会话错误"))
+        } else if (e.type === "session.idle" && e.properties.sessionID === sessionId) {
+            await flushUsage(true);
+            return
+        }
     }
+}
+
+async function collectSessionUsage(sessionId: string, directory: string): Promise<TokenUsage> {
+    let result = emptyTokenUsage();
+    const messages = (await client.session.messages({sessionID: sessionId, directory})).data || [];
+    for (const message of messages) {
+        if (message.info.role !== "assistant") continue;
+        const usage = normalizeTokens(message.info.tokens);
+        if (usage) result = addUsage(result, usage);
+        else result.complete = false
+    }
+    const children = (await client.session.children({sessionID: sessionId, directory})).data || [];
+    for (const child of children) result = addUsage(result, await collectSessionUsage(child.id, directory));
+    return result
 }
 
 async function sessionStopSummary(sessionId: string, directory: string) {
@@ -185,13 +246,15 @@ new Worker("phase2", async job => {
         const created = await client.session.create({directory: p.workspacePath, title: `Phase 2 ${p.id}`});
         if (!created.data) throw new Error("创建OpenCode会话失败");
         const sessionId = created.data.id;
+        const usageBaseline = p.tokenUsage || emptyTokenUsage();
+        const usageTracker = new SessionUsageTracker(sessionId, usageBaseline);
         await update(runId, {session: sessionId});
         if (await cancelled(runId)) {
             await client.session.abort({sessionID: sessionId, directory: p.workspacePath}).catch(() => undefined);
             return {cancelled: true}
         }
         await event(runId, "session.created", {sessionId});
-        const eventTask = consume(runId, sessionId, p.workspacePath, completed, abort.signal);
+        const eventTask = consume(runId, sessionId, p.workspacePath, completed, usageTracker, abort.signal);
         await event(runId, "command.started", {command: "/matrix-phase2"});
         await client.session.command({
             sessionID: sessionId,
@@ -200,6 +263,12 @@ new Worker("phase2", async job => {
             arguments: ""
         });
         await eventTask;
+        try {
+            await update(runId, {tokenUsage: addUsage(usageBaseline, await collectSessionUsage(sessionId, p.workspacePath))})
+        } catch {
+            usageTracker.markIncomplete();
+            await update(runId, {tokenUsage: usageTracker.snapshot()})
+        }
         const missingStages = missingCompletionStages(completed);
         if (missingStages.length) {
             const summary = await sessionStopSummary(sessionId, p.workspacePath);
