@@ -38,6 +38,22 @@ html, body, #root {
     background: linear-gradient(135deg, #17365f, #287dcc)
 }
 
+.session-expired {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: #eef3f8
+}
+
+.session-expired .ant-result {
+    width: min(560px, 100%);
+    padding: 56px 32px;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 12px 36px rgba(23, 54, 95, .12)
+}
+
 .upload-icon {
     font-size: 48px;
     color: #287dcc

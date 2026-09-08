@@ -18,6 +18,7 @@ import {
     Popconfirm,
     Popover,
     Progress,
+    Result,
     Row,
     Select,
     Slider,
@@ -51,7 +52,7 @@ import {
     SettingOutlined,
     StopOutlined
 } from "@ant-design/icons";
-import {Navigate, Route, Routes, useNavigate, useParams} from "react-router-dom";
+import {Navigate, Route, Routes, useLocation, useNavigate, useParams} from "react-router-dom";
 import {RequirementDiffPage} from "./RequirementDiff";
 import {SortableTableList} from "./SortableTableList";
 import {readPhase2Draft, removePhase2Draft, writePhase2Draft} from "./phase2Draft";
@@ -76,8 +77,11 @@ import {
     type ReviewScores,
     type RunEvent,
     saveDownload,
+    resetSessionExpiredNotification,
+    subscribeToSessionExpired,
     type TraceLink
 } from "./api";
+import {safeReturnTo} from "./sessionNavigation";
 import {appendEditTimeOutbox, EditingTimeTracker, editTimeOutboxKey, formatEditDuration, readEditTimeOutbox, removeEditTimeOutbox} from "./editTime";
 import {DocxPreview} from "./DocxPreview";
 import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonCachedTokens} from "./runMetrics";
@@ -116,13 +120,14 @@ function localMinute(value?: string) {
 }
 
 function Login() {
-    const nav = useNavigate(), qc = useQueryClient(), login = useMutation({
+    const nav = useNavigate(), location = useLocation(), qc = useQueryClient(), login = useMutation({
         mutationFn: (v: {
             username: string,
             password: string
         }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}), onSuccess: user => {
+            resetSessionExpiredNotification();
             qc.setQueryData(["me"], user);
-            nav("/", {replace: true})
+            nav(safeReturnTo((location.state as {returnTo?: unknown} | null)?.returnTo), {replace: true})
         }
     });
     return <div className="login"><Card title="测试需求管理工具" style={{width: 420}}><Form layout="vertical"
@@ -133,6 +138,12 @@ function Login() {
         <Alert type="error" message={login.error.message}/>}<Button block type="primary" htmlType="submit"
                                                                     loading={login.isPending}>登录</Button></Form></Card>
     </div>
+}
+
+function SessionExpired({onLogin}: {onLogin: () => void}) {
+    return <div className="session-expired"><Result status="warning" title="会话过期"
+        subTitle="会话过期，请重新登录"
+        extra={<Button type="primary" size="large" onClick={onLogin}>重新登录</Button>}/></div>
 }
 
 function Shell({children, backTo, actions, beforeLeave, hideHeader = false}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean }) {
@@ -1535,9 +1546,26 @@ function Evaluation({scores, setScores, comment, setComment}: {
 }
 
 export function App() {
+    const location = useLocation(), nav = useNavigate(), qc = useQueryClient();
+    const currentPath = `${location.pathname}${location.search}${location.hash}`;
+    const [expiredPath, setExpiredPath] = useState<string>();
     const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false,
         staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false});
+    useEffect(() => subscribeToSessionExpired(() => {
+        setExpiredPath(previous => previous || currentPath);
+        void qc.cancelQueries();
+        qc.removeQueries({predicate: query => query.queryKey[0] !== "me"});
+        qc.setQueryData(["me"], null)
+    }), [currentPath, qc]);
     if (me.isLoading) return <Spin fullscreen/>;
+    const initialSessionExpired = location.pathname !== "/login" && me.error instanceof ApiError && me.error.status === 401;
+    if (expiredPath || initialSessionExpired) {
+        const returnTo = expiredPath || currentPath;
+        return <SessionExpired onLogin={() => {
+            setExpiredPath(undefined);
+            nav("/login", {replace: true, state: {returnTo}})
+        }}/>
+    }
     return <Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route

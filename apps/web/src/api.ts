@@ -10,8 +10,45 @@ async function parseError(response: Response) {
     return new ApiError(details?.message || response.statusText, response.status, details || undefined)
 }
 
-export function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-    return fetch(input, {...init, credentials: "include"})
+type SessionExpiredListener = () => void;
+
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+let sessionExpiredNotified = false;
+
+function requestPath(input: RequestInfo | URL) {
+    const value = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    try {
+        return new URL(value, "http://localhost").pathname
+    } catch {
+        return value
+    }
+}
+
+function isAuthenticationRequest(input: RequestInfo | URL) {
+    return /^\/(?:api\/)?auth(?:\/|$)/.test(requestPath(input))
+}
+
+function notifySessionExpired() {
+    if (sessionExpiredNotified) return;
+    sessionExpiredNotified = true;
+    for (const listener of sessionExpiredListeners) listener()
+}
+
+export function subscribeToSessionExpired(listener: SessionExpiredListener) {
+    sessionExpiredListeners.add(listener);
+    return () => {
+        sessionExpiredListeners.delete(listener)
+    }
+}
+
+export function resetSessionExpiredNotification() {
+    sessionExpiredNotified = false
+}
+
+export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+    const response = await fetch(input, {...init, credentials: "include"});
+    if (response.status === 401 && !isAuthenticationRequest(input)) notifySessionExpired();
+    return response
 }
 
 export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
