@@ -1,7 +1,9 @@
 ﻿param(
   [string]$OutputDirectory = "release/requirements-manager-arm64-offline",
   [string]$ComposeVersion = "v2.39.2",
+  [string]$DownloadCacheDirectory = "release/download-cache",
   [string]$HostProxyUrl = "",
+  [switch]$RefreshDownloads,
   [switch]$SkipBuild
 )
 
@@ -9,6 +11,11 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RepositoryRoot = (Resolve-Path (Join-Path $ProjectRoot "..")).Path
 $OutputPath = Join-Path $ProjectRoot $OutputDirectory
+$DownloadCachePath = if ([System.IO.Path]::IsPathRooted($DownloadCacheDirectory)) {
+  [System.IO.Path]::GetFullPath($DownloadCacheDirectory)
+} else {
+  [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $DownloadCacheDirectory))
+}
 $ImagesArchive = Join-Path $OutputPath "requirements-manager-arm64-images.tar"
 $BundleArchive = "$OutputPath.tar.gz"
 $BuildProxyArguments = @()
@@ -45,6 +52,53 @@ function Invoke-Download([string]$Uri, [string]$Destination, [string]$ProxyUrl =
   }
   $Arguments += $Uri
   Invoke-Checked "curl.exe" $Arguments
+}
+
+function Test-Arm64Elf([string]$Path) {
+  if (-not (Test-Path $Path -PathType Leaf)) {
+    return $false
+  }
+  $Stream = [System.IO.File]::OpenRead($Path)
+  try {
+    if ($Stream.Length -lt 20) {
+      return $false
+    }
+    $Header = New-Object byte[] 20
+    if ($Stream.Read($Header, 0, $Header.Length) -ne $Header.Length) {
+      return $false
+    }
+    # ELF magic + 64-bit + little-endian + e_machine=AArch64 (0x00B7).
+    return $Header[0] -eq 0x7f -and $Header[1] -eq 0x45 -and $Header[2] -eq 0x4c -and `
+      $Header[3] -eq 0x46 -and $Header[4] -eq 2 -and $Header[5] -eq 1 -and `
+      $Header[18] -eq 0xb7 -and $Header[19] -eq 0x00
+  } finally {
+    $Stream.Dispose()
+  }
+}
+
+function Get-CachedArm64Download(
+  [string]$Uri,
+  [string]$CachePath,
+  [string]$ProxyUrl = "",
+  [switch]$Refresh
+) {
+  if (-not $Refresh -and (Test-Arm64Elf $CachePath)) {
+    Write-Host "复用已缓存的ARM64二进制：$CachePath"
+    return $CachePath
+  }
+
+  New-Item (Split-Path $CachePath -Parent) -ItemType Directory -Force | Out-Null
+  $PartialPath = "$CachePath.partial"
+  if ($Refresh -and (Test-Path $PartialPath)) {
+    Remove-Item $PartialPath -Force
+  }
+  Write-Host "下载ARM64二进制到缓存：$CachePath"
+  Invoke-Download $Uri $PartialPath $ProxyUrl
+  if (-not (Test-Arm64Elf $PartialPath)) {
+    throw "下载文件不是有效的Linux ARM64 ELF二进制：$PartialPath"
+  }
+  Move-Item $PartialPath $CachePath -Force
+  return $CachePath
 }
 
 Write-Host "检查Docker Buildx..."
@@ -154,8 +208,11 @@ Copy-Item (Join-Path $ProjectRoot "offline/README-OFFLINE.md") $OutputPath
 
 $ComposeUrl = "https://github.com/docker/compose/releases/download/$ComposeVersion/docker-compose-linux-aarch64"
 $ComposePath = Join-Path $OutputPath "bin/docker-compose"
-Write-Host "下载ARM64 Docker Compose：$ComposeVersion"
-Invoke-Download $ComposeUrl $ComposePath $HostProxyUrl
+$ComposeCacheName = "docker-compose-$($ComposeVersion -replace '[^A-Za-z0-9._-]', '_')-linux-aarch64"
+$ComposeCachePath = Join-Path $DownloadCachePath $ComposeCacheName
+Write-Host "准备ARM64 Docker Compose：$ComposeVersion"
+$CachedComposePath = Get-CachedArm64Download $ComposeUrl $ComposeCachePath $HostProxyUrl -Refresh:$RefreshDownloads
+Copy-Item $CachedComposePath $ComposePath
 
 Write-Host "导出ARM64镜像归档，文件可能较大..."
 Invoke-Checked "docker" (@("image", "save", "-o", $ImagesArchive) + $AllImages)

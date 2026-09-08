@@ -240,6 +240,16 @@ cd requirements-manager
 ./scripts/build-arm64-offline.ps1 -HostProxyUrl "http://127.0.0.1:7897"
 ```
 
+脚本会把按版本下载的ARM64 Docker Compose二进制缓存到 `release/download-cache/`。后续使用相同
+`ComposeVersion` 构建时直接复用缓存，不再重复访问GitHub；切换版本会自动使用新的缓存文件。如需
+忽略现有缓存并重新下载，可执行：
+
+```powershell
+./scripts/build-arm64-offline.ps1 -RefreshDownloads
+```
+
+可通过 `-DownloadCacheDirectory` 指定其他持久缓存目录；相对路径以仓库目录为基准，也可传入绝对路径。
+
 脚本会同时生成目录 `release/requirements-manager-arm64-offline/` 和可直接交付的 `release/requirements-manager-arm64-offline.tar.gz`，其中包含ARM64镜像归档、Compose二进制、校验文件和服务器脚本。
 
 ### 2. 在ARM64离线服务器安装
