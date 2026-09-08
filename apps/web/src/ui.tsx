@@ -135,9 +135,9 @@ function Login() {
     </div>
 }
 
-function Shell({children, backTo, actions, beforeLeave}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean }) {
+function Shell({children, backTo, actions, beforeLeave, hideHeader = false}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean }) {
     const nav = useNavigate(), qc = useQueryClient();
-    return <Layout className="shell"><Header className="header"><b>Matrix测试需求管理</b>{backTo &&
+    return <Layout className="shell">{!hideHeader && <Header className="header"><b>Matrix测试需求管理</b>{backTo &&
         <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>返回项目</Button>}<span
         className="grow"/>{actions}<Button ghost icon={<DownloadOutlined/>}
         href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
@@ -147,7 +147,7 @@ function Shell({children, backTo, actions, beforeLeave}: { children: React.React
         await api("/auth/logout", {method: "POST"});
         qc.setQueryData(["me"], null);
         nav("/login", {replace: true})
-    }}>退出</Button></Header>{children}</Layout>
+    }}>退出</Button></Header>}{children}</Layout>
 }
 
 function Projects() {
@@ -1542,5 +1542,5 @@ export function App() {
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
         path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/requirement-diff" element={me.data ? <Shell><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes>
+        path="/projects/:id/requirement-diff" element={me.data ? <Shell hideHeader><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes>
 }

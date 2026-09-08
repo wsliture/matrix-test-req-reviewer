@@ -1882,6 +1882,12 @@ html, body, #root {
     justify-content: flex-end
 }
 
+.requirement-diff-global-actions {
+    flex: none;
+    padding-left: 2px;
+    border-left: 1px solid rgba(255, 255, 255, .25)
+}
+
 .requirement-diff-header .revision-select {
     width: clamp(220px, 18vw, 300px);
     height: 48px
@@ -1918,9 +1924,13 @@ html, body, #root {
 
 @media (max-width: 1180px) {
     .requirement-diff-actions {
-        width: 100%;
+        flex: 1 1 100%;
         margin-left: 0;
         justify-content: flex-start
+    }
+
+    .requirement-diff-global-actions {
+        margin-left: auto
     }
 }
 
