@@ -91,6 +91,28 @@ export type Project = {
 };
 export type CurrentUser = { id: string; username: string; role: "ADMIN" | "REVIEWER" | "VIEWER" };
 
+export type DebugTreeNode = {
+    name: string;
+    path: string;
+    type: "directory" | "file";
+    size?: number;
+    modifiedAt?: string;
+    version?: string;
+    children?: DebugTreeNode[]
+};
+
+export type DebugFile = {
+    path: string;
+    size: number;
+    modifiedAt: string;
+    version: string;
+    kind: "text" | "image" | "binary";
+    content?: string;
+    contentBase64?: string;
+    mimeType?: string;
+    runStatus?: string | null
+};
+
 export type DocumentNode = {
     id: string;
     documentId: string;

@@ -34,6 +34,7 @@ import {
 } from "antd";
 import {
     ArrowLeftOutlined,
+    BugOutlined,
     CheckCircleFilled,
     ClockCircleOutlined,
     CloseOutlined,
@@ -87,6 +88,7 @@ import {DocxPreview} from "./DocxPreview";
 import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonCachedTokens} from "./runMetrics";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
+import {DebugFilesPanel} from "./DebugFilesPanel";
 
 const {Header, Content, Sider} = Layout;
 
@@ -146,9 +148,9 @@ function SessionExpired({onLogin}: {onLogin: () => void}) {
         extra={<Button type="primary" size="large" onClick={onLogin}>重新登录</Button>}/></div>
 }
 
-function Shell({children, backTo, actions, beforeLeave, hideHeader = false}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean }) {
+function Shell({children, backTo, actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
     const nav = useNavigate(), qc = useQueryClient();
-    return <Layout className="shell">{!hideHeader && <Header className="header"><b>Matrix测试需求管理</b>{backTo &&
+    return <Layout className={`shell ${className}`}>{!hideHeader && <Header className="header"><b>Matrix测试需求管理</b>{backTo &&
         <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>返回项目</Button>}<span
         className="grow"/>{actions}<Button ghost icon={<DownloadOutlined/>}
         href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
@@ -539,7 +541,9 @@ function ChapterStatus({project, run}: { project: Project; run?: Phase2Run }) {
 }
 
 function ProjectPage() {
-    const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(), query = useQuery({
+    const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(),
+        user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(false),
+        [debugDirty, setDebugDirty] = useState(false), query = useQuery({
         queryKey: ["project", id],
         queryFn: () => api<Project>(`/projects/${id}`),
         refetchInterval: query => {
@@ -558,6 +562,15 @@ function ProjectPage() {
             message.success("已终止测试需求生成")
         }
     });
+    const confirmDebugLeave = useCallback(() => !debugDirty || window.confirm("调试器中有未保存的文件修改，离开将丢失这些修改，是否继续？"), [debugDirty]);
+    useEffect(() => {
+        const beforeUnload = (event: BeforeUnloadEvent) => {
+            if (!debugDirty) return;
+            event.preventDefault(); event.returnValue = ""
+        };
+        window.addEventListener("beforeunload", beforeUnload);
+        return () => window.removeEventListener("beforeunload", beforeUnload)
+    }, [debugDirty]);
     if (query.isLoading) return <Shell><Spin/></Shell>;
     if (query.error) {
         return <Shell><Content className="page"><Alert type="warning" showIcon
@@ -570,8 +583,13 @@ function ProjectPage() {
     if (!query.data) return <Shell><Spin/></Shell>;
     const p = query.data, latest = p.runs[0];
     const running = latest?.status === "RUNNING" || latest?.status === "QUEUED";
-    return <Shell><Content className="page"><Space><Button onClick={() => nav("/")}>返回</Button><Typography.Title
-        level={3}>{p.name}</Typography.Title><Status value={p.status}/></Space><ChapterStatus project={p} run={latest}/>
+    const detail = <Content className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Button onClick={() => {
+        if (confirmDebugLeave()) nav("/")
+    }}>返回</Button><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
+        {user?.role === "ADMIN" && <Button type={debugOpen ? "primary" : "default"} icon={<BugOutlined/>} onClick={() => {
+            if (debugOpen && !confirmDebugLeave()) return;
+            setDebugOpen(value => !value)
+        }}>{debugOpen ? "关闭调试模式" : "调试模式"}</Button>}</Space><ChapterStatus project={p} run={latest}/>
         {p.status === "READY_FOR_REVIEW" &&
             <Button type="primary" onClick={() => nav(`/projects/${id}/review`)}>进入评审</Button>}
         <Card title="Phase 2测试需求生成"><Progress percent={latest?.progress || 0}
@@ -594,7 +612,11 @@ function ProjectPage() {
                 <Alert className="phase2-run-feedback" type="error" showIcon
                     message={(run.error || cancel.error)?.message}/>}<RunLogs key={latest?.id || id} run={latest}
                                                                                                        onEvents={() => qc.invalidateQueries({queryKey: ["project", id]})}/>
-        </Card></Content></Shell>
+        </Card></Content>;
+    return <Shell className={debugOpen && user?.role === "ADMIN" ? "project-debug-shell" : ""} beforeLeave={confirmDebugLeave}>{debugOpen && user?.role === "ADMIN" ? <Splitter className="project-debug-splitter">
+        <Splitter.Panel min="38%" defaultSize="66%">{detail}</Splitter.Panel>
+        <Splitter.Panel min={420} collapsible><DebugFilesPanel projectId={id} running={running} onDirtyChange={setDebugDirty}/></Splitter.Panel>
+    </Splitter> : detail}</Shell>
 }
 
 type TreeItem = { key: string; title: React.ReactNode; children?: TreeItem[] };
