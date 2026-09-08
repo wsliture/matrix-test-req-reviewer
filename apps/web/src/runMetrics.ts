@@ -4,11 +4,10 @@ export function formatTokenCount(value: number): string {
     return `${(value / 1_000_000).toFixed(1)}M`
 }
 
-export function elapsedMilliseconds(startedAt?: string, finishedAt?: string, now = Date.now()): number {
-    if (!startedAt) return 0;
-    const start = new Date(startedAt).getTime(), end = finishedAt ? new Date(finishedAt).getTime() : now;
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
-    return Math.max(0, end - start)
+export function elapsedMilliseconds(elapsedMs: number | undefined, status: string | undefined,
+    receivedAt: number, now = performance.now()): number | undefined {
+    if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) return undefined;
+    return elapsedMs + (status === "RUNNING" ? Math.max(0, now - receivedAt) : 0)
 }
 
 export function formatElapsed(milliseconds: number): string {

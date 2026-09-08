@@ -1,3 +1,4 @@
+import {readWithRunClock, withElapsed} from "./run-clock.js";
 import {ConflictException, Controller, Get, Injectable, MessageEvent, Param, Post, Sse} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
@@ -63,15 +64,17 @@ export class RunsService {
             removeOnComplete: 100,
             removeOnFail: 100
         });
-        return run
+        return this.get(run.id)
     }
 
     async get(id: string) {
-        const run = await this.db.phase2Run.findUniqueOrThrow({
-            where: {id},
-            include: {events: {orderBy: {id: "desc"}, take: 100}}
-        });
-        return {...run, events: run.events.map(item => ({...item, id: item.id.toString()}))}
+        return readWithRunClock(this.db, async (tx, now) => {
+            const run = await tx.phase2Run.findUniqueOrThrow({
+                where: {id},
+                include: {events: {orderBy: {id: "desc"}, take: 100}}
+            });
+            return {...withElapsed(run, now), events: run.events.map(item => ({...item, id: item.id.toString()}))}
+        })
     }
 
     async cancel(id: string) {
@@ -88,10 +91,13 @@ export class RunsService {
                 if (existing) finalUsage = {...existing, complete: false}
             }
         }
-        const updated = await this.db.phase2Run.update({
-            where: {id},
-            data: {status: "CANCELLED", finishedAt: new Date(), errorMessage: null,
-                ...(finalUsage ? {tokenUsage: finalUsage, usageUpdatedAt: new Date()} : {})}
+        await this.db.$transaction(async tx => {
+            const [clock] = await tx.$queryRaw<{now: Date}[]>`SELECT statement_timestamp() AT TIME ZONE 'UTC' AS now`;
+            await tx.phase2Run.update({
+                where: {id},
+                data: {status: "CANCELLED", finishedAt: clock.now, errorMessage: null,
+                    ...(finalUsage ? {tokenUsage: finalUsage, usageUpdatedAt: new Date()} : {})}
+            });
         });
         await this.db.runEvent.create({data: {runId: id, type: "run.cancelled", payload: {}}});
         const job = await queue.getJob(id), state = await job?.getState();
@@ -107,7 +113,7 @@ export class RunsService {
             where: {id: run.projectId},
             data: {status: missing === 0 ? "READY_FOR_REVIEW" : missing >= 13 ? "PENDING_GENERATION" : "INCOMPLETE_MATRIX"}
         });
-        return updated
+        return this.get(id)
     }
 
     events(id: string): Observable<MessageEvent> {
@@ -121,9 +127,12 @@ export class RunsService {
             if (rows.length) cursor = rows.at(-1)!.id;
             return {type: "run-events", data: rows.map(row => ({...row, id: row.id.toString()}))} as MessageEvent
         }));
-        const state = interval(1000).pipe(startWith(0), switchMap(() => this.db.phase2Run.findUnique({
-            where: {id}, select: {id: true, status: true, startedAt: true, finishedAt: true,
-                tokenUsage: true, usageUpdatedAt: true}
+        const state = interval(1000).pipe(startWith(0), switchMap(() => readWithRunClock(this.db, async (tx, now) => {
+            const run = await tx.phase2Run.findUnique({
+                where: {id}, select: {id: true, status: true, startedAt: true, finishedAt: true,
+                    tokenUsage: true, usageUpdatedAt: true}
+            });
+            return run ? withElapsed(run, now) : null
         })), map(run => ({type: "run-state", data: run || undefined}) as MessageEvent));
         return merge(events, state)
     }

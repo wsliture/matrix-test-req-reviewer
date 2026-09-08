@@ -200,6 +200,7 @@ export type RunEvent = { id: string; type: string; payload: Record<string, unkno
 export type TokenUsage = {input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number;
     total: number; complete: boolean};
 export type Phase2Run = {
+    elapsedMs?: number;
     id: string;
     status: string;
     progress: number;

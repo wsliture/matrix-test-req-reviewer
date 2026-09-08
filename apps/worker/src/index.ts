@@ -75,8 +75,8 @@ async function update(runId: string, data: {
         add("tokenUsage", JSON.stringify(data.tokenUsage));
         add("usageUpdatedAt", new Date())
     }
-    if (data.status === "RUNNING") add("startedAt", new Date());
-    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "")) add("finishedAt", new Date());
+    if (data.status === "RUNNING") fields.push(`"startedAt"=coalesce("startedAt", statement_timestamp() AT TIME ZONE 'UTC')`);
+    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "")) fields.push(`"finishedAt"=statement_timestamp() AT TIME ZONE 'UTC'`);
     values.push(runId);
     await db.query(`update "Phase2Run"
                     set ${fields.join(",")}
@@ -84,7 +84,7 @@ async function update(runId: string, data: {
 }
 
 async function claim(runId: string) {
-    const result = await db.query('update "Phase2Run" set status=$1,"startedAt"=coalesce("startedAt",$2) where id=$3 and status=$4 returning id', ["RUNNING", new Date(), runId, "QUEUED"]);
+    const result = await db.query(`update "Phase2Run" set status=$1,"startedAt"=coalesce("startedAt",statement_timestamp() AT TIME ZONE 'UTC') where id=$2 and status=$3 returning id`, ["RUNNING", runId, "QUEUED"]);
     return result.rowCount === 1
 }
 

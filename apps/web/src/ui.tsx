@@ -425,8 +425,10 @@ function eventText(item: RunEvent) {
 
 function RunMetrics({run}: {run?: Phase2Run}) {
     const [, setTick] = useState(0);
+    const receivedAt = useMemo(() => performance.now(), [run]);
+    const elapsed = elapsedMilliseconds(run?.elapsedMs, run?.status, receivedAt);
     useEffect(() => {
-        if (!run?.startedAt || run.finishedAt || !["RUNNING", "QUEUED"].includes(run.status)) return;
+        if (!run?.startedAt || run.finishedAt || run.status !== "RUNNING") return;
         const timer = window.setInterval(() => setTick(value => value + 1), 1000);
         return () => window.clearInterval(timer)
     }, [run?.startedAt, run?.finishedAt, run?.status]);
@@ -439,8 +441,7 @@ function RunMetrics({run}: {run?: Phase2Run}) {
         <Tooltip title={<div>累计处理 Token 包含每轮请求重复使用的缓存上下文，不等于模型供应商
             控制台的计费 Token，最终费用以供应商账单为准。</div>}><InfoCircleOutlined
             className="run-metrics-info" aria-label="Token 统计口径说明"/></Tooltip>
-        <div className="run-metric-primary"><div className="run-metric-item"><span>已运行时间</span><strong>{formatElapsed(elapsedMilliseconds(run?.startedAt,
-            run?.finishedAt))}</strong></div><Tooltip title={usage ? <div className="run-metric-tooltip">
+        <div className="run-metric-primary"><div className="run-metric-item"><span>已运行时间</span><strong>{queued ? "等待执行" : elapsed === undefined ? "等待计时数据" : formatElapsed(elapsed)}</strong></div><Tooltip title={usage ? <div className="run-metric-tooltip">
                 <div>输入：{Math.round(usage.input).toLocaleString("en-US")}</div>
                 <div>输出：{Math.round(usage.output).toLocaleString("en-US")}</div>
                 <div>推理：{Math.round(usage.reasoning).toLocaleString("en-US")}</div>
@@ -465,7 +466,7 @@ function RunMetrics({run}: {run?: Phase2Run}) {
 function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
     const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务"),
         [runState, setRunState] = useState<Phase2Run | undefined>(run);
-    useEffect(() => setRunState(run), [run?.id, run?.status, run?.startedAt, run?.finishedAt, run?.tokenUsage]);
+    useEffect(() => setRunState(run), [run]);
     useEffect(() => {
         setEvents([]);
         if (!run) return;
@@ -476,7 +477,7 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
             return [...values.values()].sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)))
         });
         api<Phase2Run>(`/phase2-runs/${run.id}`).then(value => {
-            if (active) merge([...(value.events || [])].reverse())
+            if (active && value.id === run.id) merge([...(value.events || [])].reverse())
         }).catch(() => undefined);
         if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status)) {
             setConnection("任务已结束");
@@ -490,6 +491,7 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
             setConnection("正在连接实时日志");
             source = new EventSource(`/api/phase2-runs/${run.id}/events`, {withCredentials: true});
             source.addEventListener("run-events", raw => {
+                if (!active) return;
                 const rows = JSON.parse((raw as MessageEvent).data) as RunEvent[];
                 if (rows.length) {
                     merge(rows);
@@ -498,13 +500,13 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
                 setConnection("实时日志已连接")
             });
             source.addEventListener("run-state", raw => {
+                if (!active) return;
                 const state = JSON.parse((raw as MessageEvent).data) as Partial<Phase2Run> | null;
-                if (state) setRunState(previous => ({...(previous || run), ...state} as Phase2Run));
+                if (state?.id === run.id) setRunState(previous => ({...(previous || run), ...state} as Phase2Run));
                 setConnection("实时日志已连接")
             });
             source.onerror = () => {
-                source?.close();
-                setConnection("实时日志连接中断")
+                if (active) setConnection("实时日志连接中断，正在重连")
             }
         };
         connect();
@@ -590,7 +592,7 @@ function ProjectPage() {
                 message="测试需求生成已终止"/>}
             {(run.error || cancel.error) &&
                 <Alert className="phase2-run-feedback" type="error" showIcon
-                    message={(run.error || cancel.error)?.message}/>}<RunLogs run={latest}
+                    message={(run.error || cancel.error)?.message}/>}<RunLogs key={latest?.id || id} run={latest}
                                                                                                        onEvents={() => qc.invalidateQueries({queryKey: ["project", id]})}/>
         </Card></Content></Shell>
 }

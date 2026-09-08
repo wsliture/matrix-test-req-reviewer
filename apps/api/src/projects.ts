@@ -1,3 +1,4 @@
+import {readWithRunClock, withElapsed} from "./run-clock.js";
 import {
     BadRequestException,
     ConflictException,
@@ -38,19 +39,21 @@ export class ProjectsService {
     }
 
     list() {
-        return this.db.project.findMany({
+        return readWithRunClock(this.db, async (tx, now) => (await tx.project.findMany({
             orderBy: [{createdAt: "desc"}, {id: "desc"}],
             include: {runs: {orderBy: {startedAt: "desc"}, take: 1}, documents: true}
-        })
+        })).map(project => ({...project, runs: project.runs.map(run => withElapsed(run, now))})))
     }
 
     async get(id: string) {
-        const project = await this.db.project.findUnique({
-            where: {id},
-            include: {documents: true, runs: {orderBy: {startedAt: "desc"}}}
-        });
-        if (!project) throw new NotFoundException("项目不存在或已被删除");
-        return project
+        return readWithRunClock(this.db, async (tx, now) => {
+            const project = await tx.project.findUnique({
+                where: {id},
+                include: {documents: true, runs: {orderBy: {startedAt: "desc"}}}
+            });
+            if (!project) throw new NotFoundException("项目不存在或已被删除");
+            return {...project, runs: project.runs.map(run => withElapsed(run, now))}
+        })
     }
 
     async remove(id: string) {
