@@ -59,14 +59,7 @@ import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {
     api,
     ApiError,
-    beginAuthenticationAttempt,
-    resetAuthenticationState,
     downloadApi,
-    hasActiveAuthenticationMarker,
-    hadAuthenticatedSession,
-    isAuthenticationAttemptCurrent,
-    markAuthenticated,
-    recoverSession,
     type CurrentUser,
     type EditTimeSummary,
     type Phase2Run,
@@ -83,8 +76,6 @@ import {
     type ReviewScores,
     type RunEvent,
     saveDownload,
-    type SessionStatus,
-    subscribeSessionStatus,
     type TraceLink
 } from "./api";
 import {appendEditTimeOutbox, EditingTimeTracker, editTimeOutboxKey, formatEditDuration, readEditTimeOutbox, removeEditTimeOutbox} from "./editTime";
@@ -128,27 +119,17 @@ function Login() {
     const nav = useNavigate(), qc = useQueryClient(), login = useMutation({
         mutationFn: (v: {
             username: string,
-            password: string,
-            rememberMe: boolean
-        }) => {
-            const generation = beginAuthenticationAttempt();
-            return api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}, false)
-                .then(user => ({user, generation}))
-        }, onSuccess: async ({user, generation}) => {
-            await qc.cancelQueries({queryKey: ["me"]});
-            if (!isAuthenticationAttemptCurrent(generation) || !markAuthenticated(generation)) return;
+            password: string
+        }) => api<CurrentUser>("/auth/login", {method: "POST", body: JSON.stringify(v)}), onSuccess: user => {
             qc.setQueryData(["me"], user);
             nav("/", {replace: true})
         }
     });
     return <div className="login"><Card title="测试需求管理工具" style={{width: 420}}><Form layout="vertical"
-                                                                                            initialValues={{rememberMe: false}}
                                                                                             onFinish={v => login.mutate(v)}><Form.Item
         name="username" label="用户名" rules={[{required: true}]}><Input/></Form.Item><Form.Item name="password"
                                                                                                  label="密码"
-                                                                                                 rules={[{required: true}]}><Input.Password/></Form.Item><Form.Item
-        name="rememberMe" valuePropName="checked"><Checkbox>保持登录（30天）</Checkbox></Form.Item>{hadAuthenticatedSession() &&
-        <Alert type="warning" showIcon message="登录状态已失效，请重新登录"/>}{login.error &&
+                                                                                                 rules={[{required: true}]}><Input.Password/></Form.Item>{login.error &&
         <Alert type="error" message={login.error.message}/>}<Button block type="primary" htmlType="submit"
                                                                     loading={login.isPending}>登录</Button></Form></Card>
     </div>
@@ -164,7 +145,6 @@ function Shell({children, backTo, actions, beforeLeave}: { children: React.React
         ghost icon={<LogoutOutlined/>} onClick={async () => {
         if (beforeLeave && !beforeLeave()) return;
         await api("/auth/logout", {method: "POST"});
-        resetAuthenticationState();
         qc.setQueryData(["me"], null);
         nav("/login", {replace: true})
     }}>退出</Button></Header>{children}</Layout>
@@ -200,7 +180,6 @@ function Projects() {
             method: "POST", body: JSON.stringify(values)
         }), onSuccess: () => {
             message.success("密码修改成功，请重新登录");
-            resetAuthenticationState();
             qc.setQueryData(["me"], null);
             nav("/login", {replace: true})
         }
@@ -494,7 +473,7 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
                 active = false
             }
         }
-        let source: EventSource | undefined, reconnectTimer: number | undefined;
+        let source: EventSource | undefined;
         const connect = () => {
             if (!active) return;
             setConnection("正在连接实时日志");
@@ -514,17 +493,13 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
             });
             source.onerror = () => {
                 source?.close();
-                setConnection("连接中断，正在恢复登录状态");
-                recoverSession().then(() => {
-                    if (active) reconnectTimer = window.setTimeout(connect, 500)
-                }).catch(() => setConnection("登录状态已失效"))
+                setConnection("实时日志连接中断")
             }
         };
         connect();
         return () => {
             active = false;
-            source?.close();
-            if (reconnectTimer) window.clearTimeout(reconnectTimer)
+            source?.close()
         }
     }, [run?.id, run?.status]);
     return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
@@ -554,7 +529,10 @@ function ProjectPage() {
     const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(), query = useQuery({
         queryKey: ["project", id],
         queryFn: () => api<Project>(`/projects/${id}`),
-        refetchInterval: 3000,
+        refetchInterval: query => {
+            const project = query.state.data, latestRun = project?.runs[0];
+            return project?.status === "REBUILDING" || (["QUEUED", "RUNNING"] as string[]).includes(latestRun?.status || "") ? 3000 : false
+        },
         retry: false
     }), run = useMutation({
         mutationFn: () => api<Phase2Run>(`/phase2-runs/project/${id}`, {method: "POST"}),
@@ -729,7 +707,7 @@ function Review() {
             queryKey: ["reviews", id],
             queryFn: () => api<ReviewRecord[]>(`/projects/${id}/reviews`),
             retry: false
-        }), projectState = useQuery({queryKey: ["project", id], queryFn: () => api<Project>(`/projects/${id}`), refetchInterval: 2000});
+        });
     const [tracePopoverNodeId, setTracePopoverNodeId] = useState<string>();
     const [sourceNavigationKey, setSourceNavigationKey] = useState(0);
     const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
@@ -859,7 +837,7 @@ function Review() {
     const editRun = useQuery({queryKey: ["phase2-edit-run", editRunId],
         queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
         refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
-    const rebuilding = projectState.data?.status === "REBUILDING" || Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
+    const rebuilding = Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
     const interactionLocked = submissionLocked || rebuilding;
     useEffect(() => {
         if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
@@ -1557,39 +1535,12 @@ function Evaluation({scores, setScores, comment, setComment}: {
 }
 
 export function App() {
-    const qc = useQueryClient(), [sessionStatus, setSessionStatus] = useState<SessionStatus>("ready");
-    const me = useQuery({queryKey: ["me"], queryFn: ({signal}) => api<CurrentUser>("/auth/me", {signal}), retry: false});
-    useEffect(() => subscribeSessionStatus(setSessionStatus), []);
-    useEffect(() => {
-        // 登录成功会同步写入认证标记；即使React队列里仍残留一次旧的expired通知，
-        // 也不能再清空刚写入的当前用户，避免首次登录闪回登录页。
-        if (sessionStatus === "expired" && !hasActiveAuthenticationMarker()) qc.setQueryData(["me"], null)
-    }, [qc, sessionStatus]);
-    useEffect(() => {
-        if (!me.data) return;
-        let active = true;
-        const refresh = () => recoverSession().then(user => {
-            if (active) qc.setQueryData(["me"], user)
-        }).catch(() => undefined);
-        const timer = window.setInterval(refresh, 25 * 60 * 1000);
-        const onVisible = () => {
-            if (document.visibilityState === "visible") void refresh()
-        };
-        const onOnline = () => void refresh();
-        document.addEventListener("visibilitychange", onVisible);
-        window.addEventListener("online", onOnline);
-        return () => {
-            active = false;
-            window.clearInterval(timer);
-            document.removeEventListener("visibilitychange", onVisible);
-            window.removeEventListener("online", onOnline)
-        }
-    }, [me.data?.id, qc]);
+    const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false,
+        staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false});
     if (me.isLoading) return <Spin fullscreen/>;
-    return <>{sessionStatus === "recovering" && <Alert className="session-recovery-banner" type="info" showIcon
-        message="正在恢复登录状态"/>}<Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
+    return <Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
         <Navigate to="/login"/>}/><Route path="/projects/:id"
                                          element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
         path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/requirement-diff" element={me.data ? <Shell><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes></>
+        path="/projects/:id/requirement-diff" element={me.data ? <Shell><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes>
 }

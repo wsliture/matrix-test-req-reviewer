@@ -18,7 +18,7 @@ import {createHash, randomBytes} from "node:crypto";
 
 const secret = () => new TextEncoder().encode(process.env.JWT_SECRET || "development-secret-change-me-now");
 const secureCookies = () => process.env.COOKIE_SECURE?.trim().toLowerCase() === "true";
-const ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
+const ACCESS_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const refreshTokenTtlSeconds = (rememberMe: boolean) => (rememberMe ? 30 : 7) * 86400;
 const cookieOptions = (path: string, maxAge?: number) => ({
     httpOnly: true,

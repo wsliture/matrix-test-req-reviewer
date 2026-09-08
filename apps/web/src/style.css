@@ -38,16 +38,6 @@ html, body, #root {
     background: linear-gradient(135deg, #17365f, #287dcc)
 }
 
-.session-recovery-banner {
-    position: fixed;
-    z-index: 3000;
-    top: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    min-width: 260px;
-    box-shadow: 0 6px 20px rgba(15, 23, 42, .16)
-}
-
 .upload-icon {
     font-size: 48px;
     color: #287dcc
