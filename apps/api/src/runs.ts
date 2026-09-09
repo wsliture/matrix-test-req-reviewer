@@ -1,5 +1,5 @@
 import {readWithRunClock, withElapsed} from "./run-clock.js";
-import {ConflictException, Controller, Get, Injectable, MessageEvent, Param, Post, Sse} from "@nestjs/common";
+import {BadRequestException, Body, ConflictException, Controller, Get, Injectable, MessageEvent, Param, Patch, Post, Sse} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
 import {interval, map, merge, Observable, startWith, switchMap} from "rxjs";
@@ -51,12 +51,12 @@ export class RunsService {
     constructor(private db: PrismaService) {
     }
 
-    async create(projectId: string) {
+    async create(projectId: string, autoRetry = true) {
         const active = await this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
         if (active) throw new ConflictException("该项目已有Phase 2任务");
         const edit = await this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
         if (edit) throw new ConflictException("该项目正在编辑重建");
-        const run = await this.db.phase2Run.create({data: {projectId}});
+        const run = await this.db.phase2Run.create({data: {projectId, autoRetry}});
         await this.db.project.update({where: {id: projectId}, data: {status: "GENERATING"}});
         await this.db.runEvent.create({data: {runId: run.id, type: "run.queued", payload: {projectId}}});
         await queue.add("matrix-phase2", {runId: run.id, projectId}, {
@@ -65,6 +65,45 @@ export class RunsService {
             removeOnFail: 100
         });
         return this.get(run.id)
+    }
+
+    async resume(id: string) {
+        const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}});
+        if (!(run.status === "FAILED" || run.status === "CANCELLED")) {
+            throw new ConflictException("只有失败或已终止的任务可以继续")
+        }
+        const active = await this.db.phase2Run.findFirst({where: {
+            projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}
+        }});
+        if (active) throw new ConflictException("该项目已有Phase 2任务");
+        const edit = await this.db.phase2EditRun.findFirst({where: {
+            projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}
+        }});
+        if (edit) throw new ConflictException("该项目正在编辑重建");
+        await this.db.phase2Run.update({where: {id}, data: {
+            status: "QUEUED", finishedAt: null, errorMessage: null, opencodeSessionId: null,
+            currentStage: "resume_queued"
+        }});
+        await this.db.project.update({where: {id: run.projectId}, data: {status: "GENERATING"}});
+        await this.db.runEvent.create({data: {runId: id, type: "run.resumed", payload: {manual: true}}});
+        try {
+            await queue.add("matrix-phase2-resume", {runId: id, projectId: run.projectId}, {
+                jobId: `${id}-resume-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100
+            })
+        } catch (error) {
+            await this.db.phase2Run.update({where: {id}, data: {status: "FAILED", finishedAt: new Date(),
+                errorMessage: "继续任务入队失败"}});
+            await this.db.project.update({where: {id: run.projectId}, data: {status: "FAILED"}});
+            throw error
+        }
+        return this.get(id)
+    }
+
+    async setAutoRetry(id: string, value: unknown) {
+        if (typeof value !== "boolean") throw new BadRequestException("autoRetry必须是布尔值");
+        await this.db.phase2Run.update({where: {id}, data: {autoRetry: value}});
+        await this.db.runEvent.create({data: {runId: id, type: "run.auto_retry_changed", payload: {enabled: value}}});
+        return this.get(id)
     }
 
     async get(id: string) {
@@ -93,11 +132,13 @@ export class RunsService {
         }
         await this.db.$transaction(async tx => {
             const [clock] = await tx.$queryRaw<{now: Date}[]>`SELECT statement_timestamp() AT TIME ZONE 'UTC' AS now`;
-            await tx.phase2Run.update({
-                where: {id},
-                data: {status: "CANCELLED", finishedAt: clock.now, errorMessage: null,
-                    ...(finalUsage ? {tokenUsage: finalUsage, usageUpdatedAt: new Date()} : {})}
-            });
+            await tx.$executeRaw`UPDATE "Phase2Run"
+                SET status = 'CANCELLED', "finishedAt" = ${clock.now}, "errorMessage" = NULL,
+                    "accumulatedElapsedMs" = "accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0
+                      ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (${clock.now} - "attemptStartedAt")) * 1000))::BIGINT END,
+                    "attemptStartedAt" = NULL
+                WHERE id = ${id} AND status IN ('QUEUED', 'RUNNING')`;
+            if (finalUsage) await tx.phase2Run.update({where: {id}, data: {tokenUsage: finalUsage, usageUpdatedAt: new Date()}})
         });
         await this.db.runEvent.create({data: {runId: id, type: "run.cancelled", payload: {}}});
         const job = await queue.getJob(id), state = await job?.getState();
@@ -130,6 +171,7 @@ export class RunsService {
         const state = interval(1000).pipe(startWith(0), switchMap(() => readWithRunClock(this.db, async (tx, now) => {
             const run = await tx.phase2Run.findUnique({
                 where: {id}, select: {id: true, status: true, startedAt: true, finishedAt: true,
+                    accumulatedElapsedMs: true, attemptStartedAt: true, autoRetry: true, attemptCount: true,
                     tokenUsage: true, usageUpdatedAt: true}
             });
             return run ? withElapsed(run, now) : null
@@ -143,8 +185,9 @@ export class RunsController {
     constructor(private runs: RunsService) {
     }
 
-    @Post("project/:projectId") create(@Param("projectId") id: string) {
-        return this.runs.create(id)
+    @Post("project/:projectId") create(@Param("projectId") id: string, @Body() body: {autoRetry?: unknown} = {}) {
+        if (body.autoRetry !== undefined && typeof body.autoRetry !== "boolean") throw new BadRequestException("autoRetry必须是布尔值");
+        return this.runs.create(id, body.autoRetry === undefined ? true : body.autoRetry)
     }
 
     @Get(":id") get(@Param("id") id: string) {
@@ -153,6 +196,14 @@ export class RunsController {
 
     @Post(":id/cancel") cancel(@Param("id") id: string) {
         return this.runs.cancel(id)
+    }
+
+    @Post(":id/resume") resume(@Param("id") id: string) {
+        return this.runs.resume(id)
+    }
+
+    @Patch(":id/auto-retry") setAutoRetry(@Param("id") id: string, @Body() body: {autoRetry?: unknown}) {
+        return this.runs.setAutoRetry(id, body?.autoRetry)
     }
 
     @Sse(":id/events") events(@Param("id") id: string) {

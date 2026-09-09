@@ -1,10 +1,12 @@
 import {Prisma, type PrismaClient} from "@prisma/client";
 
-type RunTime = {startedAt: Date | null; finishedAt: Date | null};
+type RunTime = {accumulatedElapsedMs: bigint | number; attemptStartedAt: Date | null};
 
-export function withElapsed<T extends RunTime>(run: T, now: Date): T & {elapsedMs: number} {
-    const duration = run.startedAt ? (run.finishedAt || now).getTime() - run.startedAt.getTime() : 0;
-    return {...run, elapsedMs: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0}
+export function withElapsed<T extends RunTime>(run: T, now: Date): Omit<T, "accumulatedElapsedMs" | "attemptStartedAt"> & {elapsedMs: number} {
+    const {accumulatedElapsedMs, attemptStartedAt, ...visible} = run;
+    const accumulated = Number(accumulatedElapsedMs), active = attemptStartedAt ? now.getTime() - attemptStartedAt.getTime() : 0;
+    const duration = accumulated + Math.max(0, active);
+    return {...visible, elapsedMs: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0}
 }
 
 // The clock and run rows belong to one database snapshot, regardless of host clocks.

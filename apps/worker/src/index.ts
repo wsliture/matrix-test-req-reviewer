@@ -70,23 +70,47 @@ async function update(runId: string, data: {
     if (data.stage !== undefined) add("currentStage", data.stage);
     if (data.progress !== undefined) add("progress", data.progress);
     if (data.session) add("opencodeSessionId", data.session);
-    if (data.error) add("errorMessage", data.error);
+    if (data.error !== undefined) add("errorMessage", data.error);
     if (data.completed) add("completedStages", JSON.stringify([...data.completed]));
     if (data.tokenUsage) {
         add("tokenUsage", JSON.stringify(data.tokenUsage));
         add("usageUpdatedAt", new Date())
     }
     if (data.status === "RUNNING") fields.push(`"startedAt"=coalesce("startedAt", statement_timestamp() AT TIME ZONE 'UTC')`);
-    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "")) fields.push(`"finishedAt"=statement_timestamp() AT TIME ZONE 'UTC'`);
+    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "")) {
+        fields.push(`"finishedAt"=statement_timestamp() AT TIME ZONE 'UTC'`);
+        fields.push(`"accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END`);
+        fields.push(`"attemptStartedAt"=NULL`)
+    }
     values.push(runId);
-    await db.query(`update "Phase2Run"
+    const terminal = ["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "");
+    const result = await db.query(`update "Phase2Run"
                     set ${fields.join(",")}
-                    where id = $${values.length}`, values)
+                    where id = $${values.length}${terminal ? " and status='RUNNING'" : ""}`, values);
+    return result.rowCount || 0
 }
 
 async function claim(runId: string) {
-    const result = await db.query(`update "Phase2Run" set status=$1,"startedAt"=coalesce("startedAt",statement_timestamp() AT TIME ZONE 'UTC') where id=$2 and status=$3 returning id`, ["RUNNING", runId, "QUEUED"]);
-    return result.rowCount === 1
+    const result = await db.query(`update "Phase2Run" set status=$1,
+        "startedAt"=coalesce("startedAt",statement_timestamp() AT TIME ZONE 'UTC'),
+        "attemptStartedAt"=statement_timestamp() AT TIME ZONE 'UTC',
+        "attemptCount"="attemptCount"+1,"finishedAt"=NULL,"errorMessage"=NULL
+        ,"currentStage"=CASE WHEN "attemptCount">0 THEN 'resume_check_artifacts' ELSE "currentStage" END
+        where id=$2 and status=$3 returning id,"attemptCount"`, ["RUNNING", runId, "QUEUED"]);
+    return result.rowCount === 1 ? Number(result.rows[0].attemptCount) : undefined
+}
+
+async function finishFailedAttempt(runId: string, message: string, completed: Set<string>) {
+    const result = await db.query(`update "Phase2Run" set
+        "accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END,
+        "attemptStartedAt"=NULL,"completedStages"=$1,"errorMessage"=$2,
+        status=CASE WHEN "autoRetry" THEN 'QUEUED'::"RunStatus" ELSE 'FAILED'::"RunStatus" END,
+        "currentStage"=CASE WHEN "autoRetry" THEN 'retry_queued' ELSE "currentStage" END,
+        "finishedAt"=CASE WHEN "autoRetry" THEN NULL ELSE statement_timestamp() AT TIME ZONE 'UTC' END,
+        "opencodeSessionId"=NULL
+        where id=$3 and status='RUNNING' returning status,"autoRetry","attemptCount"`,
+        [JSON.stringify([...completed]), message, runId]);
+    return result.rows[0] as {status: string; autoRetry: boolean; attemptCount: number} | undefined
 }
 
 async function cancelled(runId: string) {
@@ -246,8 +270,9 @@ new Worker("phase2", async job => {
         completed = new Set<string>(Array.isArray(p.completedStages) ? p.completedStages.map(String) : []),
         abort = new AbortController();
     let generatedBaselineId = "";
-    if (!await claim(runId)) return {cancelled: true};
-    await event(runId, "run.started", {projectId: p.id});
+    const attempt = await claim(runId);
+    if (!attempt) return {cancelled: true};
+    await event(runId, "run.started", {projectId: p.id, attempt});
     try {
         await event(runId, "model.selected", {model: await configuredModel()});
         if (await cancelled(runId)) return {cancelled: true};
@@ -287,18 +312,41 @@ new Worker("phase2", async job => {
         await indexProject(db, p.id, p.workspacePath);
         const baseline: any = await createRequirementRevision(db, {projectId: p.id, workspace: p.workspacePath, kind: "GENERATED_BASELINE"});
         generatedBaselineId = baseline.revisionId || "";
-        await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed});
+        const completedRun = await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed});
+        if (!completedRun) {
+            if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
+            return {cancelled: true}
+        }
         await db.query('update "Project" set status=$1,"missingArtifacts"=$2,"updatedAt"=now() where id=$3', ["READY_FOR_REVIEW", JSON.stringify([]), p.id]);
-        await event(runId, "run.succeeded", {});
+        await event(runId, "run.succeeded", {attempt});
         return {ok: true}
     } catch (error) {
         abort.abort();
         if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
         if (await cancelled(runId)) return {cancelled: true};
         const message = error instanceof Error ? error.message : String(error);
-        await update(runId, {status: "FAILED", error: message, completed});
+        const failed = await finishFailedAttempt(runId, message, completed);
+        if (!failed) return {cancelled: true};
+        await event(runId, "run.attempt_failed", {message, attempt: failed.attemptCount});
+        if (failed.autoRetry) {
+            await event(runId, "run.retry_queued", {attempt: failed.attemptCount + 1});
+            try {
+                await phase2Queue.add("matrix-phase2-retry", {runId, projectId: p.id}, {
+                    jobId: `${runId}-retry-${failed.attemptCount}-${Date.now()}`,
+                    removeOnComplete: 100, removeOnFail: 100
+                });
+                return {retrying: true}
+            } catch (queueError) {
+                const queueMessage = `自动重试入队失败：${queueError instanceof Error ? queueError.message : String(queueError)}`;
+                const marked = await db.query(`update "Phase2Run" set status='FAILED',"finishedAt"=statement_timestamp() AT TIME ZONE 'UTC',"errorMessage"=$1 where id=$2 and status='QUEUED' returning id`, [queueMessage, runId]);
+                if (!marked.rowCount) return {cancelled: true};
+                await db.query('update "Project" set status=$1,"updatedAt"=now() where id=$2', ["FAILED", p.id]);
+                await event(runId, "run.failed", {message: queueMessage, attempt: failed.attemptCount});
+                throw queueError
+            }
+        }
         await db.query('update "Project" set status=$1,"updatedAt"=now() where id=$2', ["FAILED", p.id]);
-        await event(runId, "run.failed", {message});
+        await event(runId, "run.failed", {message, attempt: failed.attemptCount});
         throw error
     }
 }, {
@@ -329,7 +377,9 @@ setTimeout(async () => {
     try {
         const staleRuns = await db.query('select id,"projectId" from "Phase2Run" where status=$1', ["RUNNING"]);
         for (const run of staleRuns.rows) {
-            await db.query('update "Phase2Run" set status=$1,"opencodeSessionId"=null,"finishedAt"=null where id=$2 and status=$3', ["QUEUED", run.id, "RUNNING"]);
+            await db.query(`update "Phase2Run" set status=$1,"opencodeSessionId"=null,"finishedAt"=null,
+                "accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END,
+                "attemptStartedAt"=NULL where id=$2 and status=$3`, ["QUEUED", run.id, "RUNNING"]);
             await event(run.id, "run.resumed", {reason: "Worker重启，复用已有Raw工件继续执行"});
             await phase2Queue.add("matrix-phase2-resume", {runId: run.id, projectId: run.projectId}, {
                 jobId: `${run.id}-resume-${Date.now()}`,

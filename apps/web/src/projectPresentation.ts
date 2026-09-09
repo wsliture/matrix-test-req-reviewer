@@ -20,6 +20,9 @@ const STAGE_NAMES: Record<string, string> = {
     snapshot: "生成版本快照",
     complete: "发布完成",
     publish_failed: "发布失败",
+    resume_queued: "等待继续执行",
+    retry_queued: "等待自动重试",
+    resume_check_artifacts: "正在检查并复用已有工件",
     discover_documents: "识别源文档",
     prepare_document_artifacts: "准备文档工件",
     prepare_chapter1_scope: "准备第一章：范围",
@@ -87,6 +90,13 @@ export function activityPresentation(value?: CurrentActivity | null): ActivityPr
 
 export function projectsNeedPolling(projects?: Project[]) {
     return Boolean(projects?.some(project => project.status === "GENERATING" || project.status === "REBUILDING"))
+}
+
+export function phase2RunButtonLabel(status?: string) {
+    if (status === "QUEUED" || status === "RUNNING") return "正在生成测试需求";
+    if (status === "SUCCEEDED") return "重新生成测试需求";
+    if (status === "FAILED" || status === "CANCELLED") return "继续生成测试需求";
+    return "开始生成测试需求"
 }
 
 export function reviewSummaryText(summary?: ReviewSummary | null) {

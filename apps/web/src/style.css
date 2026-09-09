@@ -448,7 +448,10 @@ html, body, #root {
 }
 
 .trace-review {
-    min-width: 1200px
+    min-width: 1200px;
+    flex: 1;
+    min-height: 0;
+    height: auto
 }
 
 .review-main-reset, .review-main-splitter, .review-splitter-reset, .review-inner-splitter {
@@ -902,7 +905,17 @@ html, body, #root {
 }
 
 .phase2-generation-banner {
-    margin: 12px 20px 0
+    flex: none;
+    margin: 16px 24px;
+    padding: 16px 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(30, 64, 100, .06)
+}
+
+.review-shell {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden
 }
 
 .phase2-generation-tail {
@@ -1648,6 +1661,17 @@ html, body, #root {
 }
 
 @media (max-width: 900px) {
+    .review-shell {
+        height: auto;
+        min-height: 100%;
+        overflow: auto
+    }
+
+    .phase2-generation-banner {
+        margin: 12px;
+        padding: 14px 16px
+    }
+
     .trace-review {
         min-width: 0;
         height: auto;

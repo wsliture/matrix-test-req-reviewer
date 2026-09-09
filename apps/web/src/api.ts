@@ -244,6 +244,8 @@ export type Phase2Run = {
     elapsedMs?: number;
     id: string;
     status: string;
+    autoRetry: boolean;
+    attemptCount: number;
     progress: number;
     currentStage?: string;
     completedStages?: string[];

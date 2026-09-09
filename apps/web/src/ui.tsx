@@ -88,7 +88,7 @@ import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonC
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
-import {activityPresentation, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
+import {activityPresentation, phase2RunButtonLabel, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
 import {AppHeader} from "./AppHeader";
 
 const {Content, Sider} = Layout;
@@ -265,7 +265,11 @@ const CHAPTERS = [
 function eventText(item: RunEvent) {
     const mode = String(item.payload.mode || ""), stage = stageName(mode, item.payload.batchIndex);
     if (item.type === "run.queued") return "任务已进入执行队列";
-    if (item.type === "run.started") return "Worker已开始执行任务";
+    if (item.type === "run.started") return `Worker已开始第${Number(item.payload.attempt || 1)}次执行`;
+    if (item.type === "run.resumed") return "已继续生成测试需求";
+    if (item.type === "run.attempt_failed") return `第${Number(item.payload.attempt || 1)}次执行失败：${String(item.payload.message || "未知错误")}`;
+    if (item.type === "run.retry_queued") return `已自动安排第${Number(item.payload.attempt || 1)}次执行`;
+    if (item.type === "run.auto_retry_changed") return item.payload.enabled ? "已开启失败自动重试" : "已关闭失败自动重试";
     if (item.type === "model.selected") return `使用模型：${String(item.payload.name || item.payload.model || "OpenCode当前配置模型")}`;
     if (item.type === "session.created") return "OpenCode会话创建成功";
     if (item.type === "command.started") return "已提交测试需求生成命令";
@@ -295,7 +299,7 @@ function RunMetrics({run}: {run?: Phase2Run}) {
         <Tooltip title={<div>累计处理 Token 包含每轮请求重复使用的缓存上下文，不等于模型供应商
             控制台的计费 Token，最终费用以供应商账单为准。</div>}><InfoCircleOutlined
             className="run-metrics-info" aria-label="Token 统计口径说明"/></Tooltip>
-        <div className="run-metric-primary"><div className="run-metric-item"><span>已运行时间</span><strong>{queued ? "等待执行" : elapsed === undefined ? "等待计时数据" : formatElapsed(elapsed)}</strong></div><Tooltip title={usage ? <div className="run-metric-tooltip">
+        <div className="run-metric-primary"><div className="run-metric-item"><span>已运行时间</span><strong>{elapsed === undefined ? queued ? "等待执行" : "等待计时数据" : formatElapsed(elapsed)}</strong></div><Tooltip title={usage ? <div className="run-metric-tooltip">
                 <div>输入：{Math.round(usage.input).toLocaleString("en-US")}</div>
                 <div>输出：{Math.round(usage.output).toLocaleString("en-US")}</div>
                 <div>推理：{Math.round(usage.reasoning).toLocaleString("en-US")}</div>
@@ -371,7 +375,7 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
     }, [run?.id, run?.status]);
     return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
         {events.length ? <List size="small" dataSource={events} renderItem={item => <List.Item
-            className={`run-log ${item.type === "run.failed" ? "error" : item.type.endsWith("succeeded") || item.type === "stage.completed" ? "success" : "info"}`}>
+            className={`run-log ${item.type === "run.failed" || item.type === "run.attempt_failed" ? "error" : item.type.endsWith("succeeded") || item.type === "stage.completed" ? "success" : "info"}`}>
             <span className="run-log-time">{localMinute(item.createdAt)}</span><span>{eventText(item)}</span>
         </List.Item>}/> : <div className="run-log-empty">正在等待任务启动...</div>}
     </Card></>
@@ -406,9 +410,23 @@ function ProjectPage() {
             return project?.status === "REBUILDING" || (["QUEUED", "RUNNING"] as string[]).includes(latestRun?.status || "") ? 3000 : false
         },
         retry: false
-    }), run = useMutation({
-        mutationFn: () => api<Phase2Run>(`/phase2-runs/project/${id}`, {method: "POST"}),
+    }), [autoRetry, setAutoRetry] = useState(true), run = useMutation({
+        mutationFn: ({latest, enabled}: {latest?: Phase2Run; enabled: boolean}) =>
+            latest && (latest.status === "FAILED" || latest.status === "CANCELLED")
+                ? api<Phase2Run>(`/phase2-runs/${latest.id}/resume`, {method: "POST"})
+                : api<Phase2Run>(`/phase2-runs/project/${id}`, {method: "POST", body: JSON.stringify({autoRetry: enabled})}),
         onSuccess: () => qc.invalidateQueries({queryKey: ["project", id]})
+    }), updateAutoRetry = useMutation({
+        mutationFn: ({runId, enabled}: {runId: string; enabled: boolean}) => api<Phase2Run>(`/phase2-runs/${runId}/auto-retry`, {
+            method: "PATCH", body: JSON.stringify({autoRetry: enabled})
+        }),
+        onError: (error, variables) => {
+            setAutoRetry(!variables.enabled);
+            message.error(error.message)
+        },
+        onSuccess: value => qc.setQueryData<Project>(["project", id], previous => previous ? {
+            ...previous, runs: previous.runs.map(item => item.id === value.id ? {...item, autoRetry: value.autoRetry} : item)
+        } : previous)
     }), cancel = useMutation({
         mutationFn: (runId: string) => api<Phase2Run>(`/phase2-runs/${runId}/cancel`, {method: "POST"}),
         onSuccess: () => {
@@ -417,6 +435,8 @@ function ProjectPage() {
             message.success("已终止测试需求生成")
         }
     });
+    const latestRun = query.data?.runs[0];
+    useEffect(() => setAutoRetry(latestRun?.autoRetry ?? true), [latestRun?.id, latestRun?.autoRetry]);
     const confirmDebugLeave = useCallback(() => !debugDirty || window.confirm("调试器中有未保存的文件修改，离开将丢失这些修改，是否继续？"), [debugDirty]);
     useEffect(() => {
         const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -435,6 +455,7 @@ function ProjectPage() {
     if (!query.data) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     const p = query.data, latest = p.runs[0];
     const running = latest?.status === "RUNNING" || latest?.status === "QUEUED";
+    const runLabel = phase2RunButtonLabel(latest?.status);
     const detail = <Content className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
         {user?.role === "ADMIN" && <Button type={debugOpen ? "primary" : "default"} icon={<BugOutlined/>} onClick={() => {
             if (debugOpen && !confirmDebugLeave()) return;
@@ -447,17 +468,24 @@ function ProjectPage() {
         </div>}
         <Card title="Phase 2测试需求生成"><Progress percent={latest?.progress || 0}
                                                     status={latest?.status === "FAILED" ? "exception" : running ? "active" : "normal"}/>
-            <p>当前阶段：{latest?.status === "CANCELLED" ? "已终止" : latest?.currentStage ? stageName(latest.currentStage) : running ? "任务启动中" : latest?.status === "FAILED" ? "生成失败" : "尚未开始"}</p>
+            <p>当前阶段：{latest?.status === "CANCELLED" ? "已终止" : latest?.currentStage ? stageName(latest.currentStage) : running ? "任务启动中" : latest?.status === "FAILED" ? "生成失败" : "尚未开始"}
+                {running && ((latest?.attemptCount || 0) > 1 || ["resume_queued", "retry_queued", "resume_check_artifacts"].includes(latest?.currentStage || "")) &&
+                    <Tag color="blue" style={{marginLeft: 8}}>续跑累计进度 {latest?.progress || 0}%</Tag>}</p>
             <Space className="phase2-run-actions"><Button type="primary"
                 loading={run.isPending} disabled={running}
-                onClick={() => run.mutate()}>{running ? "正在生成测试需求" : "开始生成测试需求"}</Button>
+                onClick={() => run.mutate({latest, enabled: autoRetry})}>{runLabel}</Button>
+            <Checkbox checked={autoRetry} disabled={updateAutoRetry.isPending} onChange={event => {
+                const enabled = event.target.checked;
+                setAutoRetry(enabled);
+                if (latest) updateAutoRetry.mutate({runId: latest.id, enabled})
+            }}>失败自动重试</Checkbox>
             {running && latest && <Popconfirm title="终止测试需求生成？"
                                               description="终止后保留已完成阶段工件，并可重新开始生成。"
                                               okText="终止" cancelText="继续运行" okButtonProps={{danger: true}}
                                               onConfirm={() => cancel.mutate(latest.id)}><Button danger
                                                                                                  icon={<StopOutlined/>}
                                                                                                  loading={cancel.isPending}>终止生成</Button></Popconfirm>}</Space>
-            {latest?.errorMessage && <Alert className="phase2-run-feedback" type="error" showIcon
+            {latest?.status === "FAILED" && latest.errorMessage && <Alert className="phase2-run-feedback" type="error" showIcon
                 message="测试需求生成失败" description={latest.errorMessage}/>}
             {latest?.status === "CANCELLED" && <Alert className="phase2-run-feedback" type="info" showIcon
                 message="测试需求生成已终止"/>}
@@ -1252,7 +1280,7 @@ function Review() {
         </>}</Space>
     </div>;
     const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
-    return <Shell backTo={`/projects/${id}`} backLabel="返回生成进度" beforeLeave={confirmLeavingEditor}>{reviewMessageContext}
+    return <Shell className="review-shell" backTo={`/projects/${id}`} backLabel="返回生成进度" beforeLeave={confirmLeavingEditor}>{reviewMessageContext}
         {requestedChapter && !validRequestedChapter && <Alert className="phase2-generation-banner" type="warning" showIcon
             message="无法识别指定的测试需求章节" description="已显示当前可用的第一个章节。"/>}
         {requestedChapter && validRequestedChapter && !requestedChapterAvailable && <Alert className="phase2-generation-banner" type="info" showIcon

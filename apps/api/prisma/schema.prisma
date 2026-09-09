@@ -165,6 +165,10 @@ model Phase2Run {
   errorMessage String?
   startedAt DateTime?
   finishedAt DateTime?
+  autoRetry Boolean @default(true)
+  attemptCount Int @default(0)
+  accumulatedElapsedMs BigInt @default(0)
+  attemptStartedAt DateTime?
   tokenUsage Json?
   usageUpdatedAt DateTime?
   project Project @relation(fields:[projectId], references:[id], onDelete:Cascade)
