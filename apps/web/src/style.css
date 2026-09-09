@@ -16,6 +16,34 @@ html, body, #root {
     font-size: 20px
 }
 
+.header > .ant-btn-circle {
+    flex: none
+}
+
+.account-menu-trigger.ant-btn {
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent
+}
+
+.account-menu-trigger.ant-btn:hover {
+    background: rgba(255, 255, 255, .14) !important
+}
+
+.account-menu-summary {
+    display: flex;
+    min-width: 130px;
+    flex-direction: column;
+    gap: 2px
+}
+
+.account-menu-summary span {
+    color: #8c8c8c;
+    font-size: 12px
+}
+
 .grow {
     flex: 1
 }
@@ -1702,22 +1730,6 @@ html, body, #root {
     background: #fff
 }
 
-.review-center-trigger {
-    font-weight: 600
-}
-
-.review-center-trigger.is-pending {
-    color: #faad14;
-    border-color: #faad14;
-    background: rgba(250, 173, 20, .1)
-}
-
-.review-center-trigger.is-complete {
-    color: #52c41a;
-    border-color: #52c41a;
-    background: rgba(82, 196, 26, .1)
-}
-
 .review-center-summary {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;
@@ -1852,8 +1864,8 @@ html, body, #root {
     padding: 4px 10px;
     border: 0;
     border-radius: 999px;
-    background: rgba(255, 255, 255, .1);
-    color: rgba(255, 255, 255, .84);
+    background: #f4f7fb;
+    color: #64748b;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     font-size: 13px;
@@ -1863,8 +1875,8 @@ html, body, #root {
 
 .edit-time-summary:hover,
 .edit-time-summary:focus-visible {
-    background: rgba(255, 255, 255, .18);
-    color: #fff
+    background: #eaf2ff;
+    color: #1677ff
 }
 
 .edit-time-summary:focus-visible {
@@ -1873,7 +1885,7 @@ html, body, #root {
 }
 
 .edit-time-summary strong {
-    color: #fff;
+    color: #334155;
     font-weight: 600
 }
 
@@ -1952,11 +1964,115 @@ html, body, #root {
 
 .review-workspace {
     position: relative;
+    display: flex;
+    flex-direction: column;
     width: 100%;
     height: 100%;
     min-width: 0;
     min-height: 0;
     overflow: hidden
+}
+
+.review-workspace-body {
+    position: relative;
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden
+}
+
+.requirement-toolbar {
+    position: relative;
+    z-index: 22;
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    min-height: 56px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #dbe4ef;
+    background: rgba(255, 255, 255, .98);
+    box-sizing: border-box
+}
+
+.requirement-toolbar-context {
+    display: flex;
+    flex: 1 1 250px;
+    min-width: 0;
+    align-items: center;
+    gap: 12px
+}
+
+.requirement-toolbar-context > strong {
+    color: #172b4d;
+    white-space: nowrap
+}
+
+.requirement-edit-status {
+    color: #1677ff;
+    font-size: 13px;
+    white-space: nowrap
+}
+
+.review-progress-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 2px;
+    border: 0;
+    background: transparent;
+    color: #64748b;
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer
+}
+
+.review-progress-summary:hover,
+.review-progress-summary:focus-visible {
+    color: #1677ff
+}
+
+.review-progress-summary:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid #91caff;
+    outline-offset: 2px
+}
+
+.review-progress-summary.is-complete > .anticon {
+    color: #52c41a
+}
+
+.review-progress-summary:disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: .65
+}
+
+.review-menu-label {
+    display: flex;
+    min-width: 160px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px
+}
+
+.review-menu-label .ant-tag {
+    margin-inline-end: 0
+}
+
+.review-menu-complete {
+    color: #52c41a;
+    font-size: 12px
+}
+
+.requirement-toolbar-actions {
+    flex: 0 1 auto;
+    min-width: 0;
+    justify-content: flex-end
 }
 
 .review-workspace-document {
@@ -2062,6 +2178,16 @@ html, body, #root {
         min-height: 600px
     }
 
+    .review-workspace-body {
+        flex: none;
+        height: auto;
+        min-height: 600px
+    }
+
+    .requirement-toolbar {
+        align-items: flex-start
+    }
+
     .review-workspace-document {
         height: auto;
         min-height: 600px
@@ -2108,78 +2234,93 @@ html, body, #root {
     background: #f5f7fa
 }
 
-.requirement-diff-header {
+.requirement-diff-page > .header {
+    flex: none
+}
+
+.requirement-diff-context-bar {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 18px;
-    padding: 12px 18px;
-    background: #10243e;
-    color: #fff;
+    gap: 20px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #d9e2ec;
+    background: #fff;
     box-sizing: border-box
 }
 
-.requirement-diff-header h2 {
-    margin: 0;
-    margin-right: auto;
-    white-space: nowrap
-}
-
-.requirement-diff-actions {
-    min-width: 0;
-    justify-content: flex-end
-}
-
-.requirement-diff-global-actions {
+.requirement-diff-title {
     flex: none;
-    padding-left: 2px;
-    border-left: 1px solid rgba(255, 255, 255, .25)
+    min-width: 145px
 }
 
-.requirement-diff-header .revision-select {
-    width: clamp(220px, 18vw, 300px);
-    height: 48px
+.requirement-diff-title h1 {
+    margin: 0;
+    color: #172b4d;
+    font-size: 20px;
+    line-height: 1.35
 }
 
-.requirement-diff-header .revision-select .ant-select-selector {
+.requirement-diff-title span {
+    color: #7b8798;
+    font-size: 12px
+}
+
+.diff-version-comparison {
+    display: grid;
+    flex: 1 1 560px;
+    grid-template-columns: minmax(220px, 1fr) 36px minmax(220px, 1fr);
+    align-items: end;
+    gap: 8px;
+    min-width: 0
+}
+
+.diff-version-comparison label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+    color: #526277;
+    font-size: 12px;
+    font-weight: 600
+}
+
+.diff-version-comparison .revision-select {
+    width: 100%;
+    height: 44px
+}
+
+.diff-version-comparison .revision-select .ant-select-selector {
     height: 100%;
     padding: 4px 34px 4px 12px;
     align-items: center
 }
 
-.requirement-diff-header .revision-select .ant-select-selection-item {
+.diff-version-comparison .revision-select .ant-select-selection-item {
     min-width: 0;
     display: flex;
     align-items: center
 }
 
-.requirement-diff-header .revision-option {
+.diff-version-comparison .revision-option {
     width: 100%
 }
 
-.revision-swap {
+.revision-swap.ant-btn {
     flex: none;
-    padding: 8px 2px;
-    color: #d6e4ff;
-    cursor: pointer;
+    color: #64748b;
     transition: color .2s ease, transform .2s ease
 }
 
-.revision-swap:hover {
-    color: #fff;
+.revision-swap.ant-btn:hover {
+    color: #1677ff;
     transform: rotate(180deg)
 }
 
-@media (max-width: 1180px) {
-    .requirement-diff-actions {
-        flex: 1 1 100%;
-        margin-left: 0;
-        justify-content: flex-start
-    }
-
-    .requirement-diff-global-actions {
-        margin-left: auto
-    }
+.diff-download-button {
+    flex: none;
+    align-self: flex-end;
+    height: 44px
 }
 
 .requirement-diff-toolbar {
@@ -2304,13 +2445,31 @@ html, body, #root {
         grid-template-columns:1fr
     }
 
-    .requirement-diff-header {
+    .requirement-diff-context-bar {
         align-items: flex-start;
-        flex-wrap: wrap
+        gap: 12px
     }
 
-    .requirement-diff-header h2 {
+    .requirement-diff-title {
         width: 100%
+    }
+
+    .diff-version-comparison {
+        flex-basis: 100%;
+        grid-template-columns: 1fr
+    }
+
+    .revision-swap.ant-btn {
+        justify-self: center;
+        transform: rotate(90deg)
+    }
+
+    .revision-swap.ant-btn:hover {
+        transform: rotate(270deg)
+    }
+
+    .diff-download-button {
+        margin-left: auto
     }
 }
 

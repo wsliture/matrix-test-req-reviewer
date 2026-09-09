@@ -8,6 +8,7 @@ import {
     Checkbox,
     Col,
     Drawer,
+    Dropdown,
     Empty,
     Form,
     Input,
@@ -26,7 +27,6 @@ import {
     Spin,
     Splitter,
     Tag,
-    Tabs,
     Tooltip,
     Tree,
     Typography,
@@ -41,16 +41,14 @@ import {
     CloseCircleFilled,
     DeleteOutlined,
     DownloadOutlined,
-    ExportOutlined,
+    EllipsisOutlined,
     InfoCircleOutlined,
     EditOutlined,
     EyeOutlined,
     SaveOutlined,
     FileZipOutlined,
-    LogoutOutlined,
     MenuUnfoldOutlined,
     PlusOutlined,
-    SettingOutlined,
     StopOutlined
 } from "@ant-design/icons";
 import {Navigate, Route, Routes, useLocation, useNavigate, useParams} from "react-router-dom";
@@ -91,8 +89,9 @@ import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
 import {activityPresentation, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
+import {AppHeader} from "./AppHeader";
 
-const {Header, Content, Sider} = Layout;
+const {Content, Sider} = Layout;
 
 type SplitSizes = Array<number | string>;
 const splitStorageKey = (name: string) => `matrix-requirements-review:${name}`;
@@ -151,29 +150,17 @@ function SessionExpired({onLogin}: {onLogin: () => void}) {
 }
 
 function Shell({children, backTo, backLabel = "返回项目", actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; backTo?: string; backLabel?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
-    const nav = useNavigate(), qc = useQueryClient();
-    return <Layout className={`shell ${className}`}>{!hideHeader && <Header className="header"><b>Matrix测试需求管理</b>{backTo &&
-        <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>{backLabel}</Button>}<span
-        className="grow"/>{actions}<Button ghost icon={<DownloadOutlined/>}
-        href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
-        download="Matrix-Req-Manager用户使用手册.pdf">下载使用手册</Button><Button
-        ghost icon={<LogoutOutlined/>} onClick={async () => {
-        if (beforeLeave && !beforeLeave()) return;
-        await api("/auth/logout", {method: "POST"});
-        qc.setQueryData(["me"], null);
-        nav("/login", {replace: true})
-    }}>退出</Button></Header>}{children}</Layout>
+    return <Layout className={`shell ${className}`}>{!hideHeader && <AppHeader backTo={backTo} backLabel={backLabel}
+        actions={actions} beforeLeave={beforeLeave}/>}{children}</Layout>
 }
 
 function Projects() {
-    const qc = useQueryClient(), nav = useNavigate(), user = qc.getQueryData<CurrentUser>(["me"]), query = useQuery({
+    const qc = useQueryClient(), nav = useNavigate(), query = useQuery({
         queryKey: ["projects"],
         queryFn: () => api<Project[]>("/projects"),
         refetchInterval: query => projectsNeedPolling(query.state.data) ? 3000 : false
     }), [open, setOpen] = useState(false), [archiveFile, setArchiveFile] = useState<File | null>(null),
-        [createForm] = Form.useForm(), [settingsOpen, setSettingsOpen] = useState(false),
-        [passwordForm] = Form.useForm(), [userForm] = Form.useForm(),
-        [configContent, setConfigContent] = useState(""), upload = useMutation({
+        [createForm] = Form.useForm(), upload = useMutation({
         mutationFn: async ({name, file}: { name: string; file: File }) => {
             const form = new FormData();
             form.append("name", name);
@@ -187,37 +174,6 @@ function Projects() {
             message.success("项目创建完成");
             location.href = `/projects/${p.id}`
         }
-    }), configQuery = useQuery({
-        queryKey: ["opencode-config"],
-        queryFn: () => api<{ content: string }>("/settings/opencode"),
-        enabled: settingsOpen && user?.role === "ADMIN"
-    }), changePassword = useMutation({
-        mutationFn: (values: { currentPassword: string; newPassword: string }) => api("/auth/change-password", {
-            method: "POST", body: JSON.stringify(values)
-        }), onSuccess: () => {
-            message.success("密码修改成功，请重新登录");
-            qc.setQueryData(["me"], null);
-            nav("/login", {replace: true})
-        }
-    }), createUser = useMutation({
-        mutationFn: (values: { username: string; password: string }) => api<{
-            id: string;
-            username: string;
-            role: string;
-            createdAt: string
-        }>("/settings/users", {method: "POST", body: JSON.stringify(values)}),
-        onSuccess: result => {
-            userForm.resetFields();
-            message.success(`用户“${result.username}”已创建`)
-        }
-    }), saveConfig = useMutation({
-        mutationFn: () => api<{ content: string }>("/settings/opencode", {
-            method: "PUT", body: JSON.stringify({content: configContent})
-        }), onSuccess: result => {
-            setConfigContent(result.content);
-            qc.setQueryData(["opencode-config"], result);
-            message.success("OpenCode配置已保存并生效")
-        }
     }), remove = useMutation({
         mutationFn: (id: string) => api<{ id: string }>(`/projects/${id}`, {method: "DELETE"}),
         onSuccess: () => {
@@ -227,58 +183,7 @@ function Projects() {
         },
         onError: error => message.error(error.message)
     });
-    useEffect(() => {
-        if (configQuery.data?.content) setConfigContent(configQuery.data.content)
-    }, [configQuery.data?.content]);
-    const settings = <Button ghost icon={<SettingOutlined/>} onClick={() => setSettingsOpen(true)}>设置</Button>;
-    const settingsItems = [{
-        key: "password", label: "修改密码", children: <Form form={passwordForm} layout="vertical"
-            onFinish={values => changePassword.mutate({currentPassword: values.currentPassword, newPassword: values.newPassword})}>
-            <Form.Item name="currentPassword" label="当前密码" rules={[{required: true, message: "请输入当前密码"}]}><Input.Password/></Form.Item>
-            <Form.Item name="newPassword" label="新密码" rules={[{required: true, message: "请输入新密码"},
-                {min: 8, max: 128, message: "密码长度必须为8至128个字符"}]}><Input.Password/></Form.Item>
-            <Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{required: true, message: "请再次输入新密码"},
-                ({getFieldValue}: any) => ({validator(_: unknown, value: string) {
-                    return !value || getFieldValue("newPassword") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的新密码不一致"))
-                }})]}><Input.Password/></Form.Item>
-            {changePassword.error && <Alert type="error" showIcon message={changePassword.error.message}/>}<Button
-                type="primary" htmlType="submit" loading={changePassword.isPending}>修改密码</Button></Form>
-    }, ...(user?.role === "ADMIN" ? [{
-        key: "users", label: "添加用户", children: <Form form={userForm} layout="vertical"
-            onFinish={values => createUser.mutate({username: values.username.trim(), password: values.password})}>
-            <Alert type="info" showIcon message="新用户将以评审人员身份创建，可使用项目创建、测试需求生成、评审和导出功能。"/>
-            <Form.Item name="username" label="用户名" rules={[{required: true, whitespace: true, message: "请输入用户名"},
-                {max: 64, message: "用户名不能超过64个字符"}]}><Input autoComplete="off" placeholder="请输入用户名"/></Form.Item>
-            <Form.Item name="password" label="初始密码" rules={[{required: true, message: "请输入初始密码"},
-                {min: 8, max: 128, message: "密码长度必须为8至128个字符"}]}><Input.Password autoComplete="new-password"/></Form.Item>
-            <Form.Item name="confirmPassword" label="确认初始密码" dependencies={["password"]} rules={[{required: true, message: "请再次输入初始密码"},
-                ({getFieldValue}: any) => ({validator(_: unknown, value: string) {
-                    return !value || getFieldValue("password") === value ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致"))
-                }})]}><Input.Password autoComplete="new-password"/></Form.Item>
-            {createUser.isSuccess && <Alert type="success" showIcon closable
-                message={`用户“${createUser.data.username}”创建成功`}
-                description="该用户现在可以使用初始密码登录系统。"
-                onClose={() => createUser.reset()}/>}
-            {createUser.error && <Alert type="error" showIcon message={createUser.error.message}/>}<Button
-                type="primary" htmlType="submit" loading={createUser.isPending}>创建用户</Button></Form>
-    }, {
-        key: "opencode", label: "OpenCode配置", children: <div><Alert type="warning" showIcon
-            message="配置中可能包含明文API Key，仅管理员可以查看和修改。保存时会自动保留Matrix插件。"/>
-            {configQuery.isLoading ? <Spin/> : <><Input.TextArea className="opencode-config-editor" rows={20}
-                value={configContent} onChange={event => setConfigContent(event.target.value)} spellCheck={false}/>
-                {configQuery.error && <Alert type="error" showIcon message={configQuery.error.message}/>}
-                {saveConfig.error && <Alert type="error" showIcon message={saveConfig.error.message}/>}<Space>
-                    <Button onClick={() => {
-                        try {
-                            setConfigContent(JSON.stringify(JSON.parse(configContent), null, 2) + "\n")
-                        } catch {
-                            message.error("当前内容不是合法JSON")
-                        }
-                    }}>格式化JSON</Button><Button type="primary" loading={saveConfig.isPending}
-                                              onClick={() => saveConfig.mutate()}>保存并应用</Button></Space></>}
-        </div>
-    }] : [])];
-    return <Shell actions={settings}><Content className="page"><Space
+    return <Shell><Content className="page"><Space
         style={{width: "100%", justifyContent: "space-between"}}><Typography.Title level={3}>项目列表</Typography.Title><Button
         type="primary" icon={<PlusOutlined/>} onClick={() => setOpen(true)}>新建项目</Button></Space><Row
         gutter={[16, 16]}>{query.data?.slice().sort((left, right) => {
@@ -327,9 +232,7 @@ function Projects() {
                 return false
             }} onRemove={() => setArchiveFile(null)}><p><FileZipOutlined className="upload-icon"/></p>
             <p>上传仅包含DOCX源文档的ZIP压缩包</p><p className="upload-hint">不允许包含DOC、PDF、.matrix或其他格式文件</p>
-        </Upload.Dragger></Form.Item></Form>{upload.error && <Alert type="error" showIcon message={upload.error.message}/>}</Modal>
-        <Modal open={settingsOpen} title="系统设置" width={760} footer={null} destroyOnHidden
-               onCancel={() => setSettingsOpen(false)}><Tabs items={settingsItems}/></Modal></Content></Shell>
+        </Upload.Dragger></Form.Item></Form>{upload.error && <Alert type="error" showIcon message={upload.error.message}/>}</Modal></Content></Shell>
 }
 
 function Status({value}: { value: string }) {
@@ -520,21 +423,16 @@ function ProjectPage() {
         window.addEventListener("beforeunload", beforeUnload);
         return () => window.removeEventListener("beforeunload", beforeUnload)
     }, [debugDirty]);
-    if (query.isLoading) return <Shell><Spin/></Shell>;
+    if (query.isLoading) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     if (query.error) {
-        return <Shell><Content className="page"><Alert type="warning" showIcon
+        return <Shell backTo="/" backLabel="返回项目列表"><Content className="page"><Alert type="warning" showIcon
                                                        message="项目不存在或已被删除"
-                                                       description={query.error.message}
-                                                       action={<Button type="primary" onClick={() => {
-                                                           nav("/", {replace: true})
-                                                       }}>返回项目列表</Button>}/></Content></Shell>
+                                                       description={query.error.message}/></Content></Shell>
     }
-    if (!query.data) return <Shell><Spin/></Shell>;
+    if (!query.data) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     const p = query.data, latest = p.runs[0];
     const running = latest?.status === "RUNNING" || latest?.status === "QUEUED";
-    const detail = <Content className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Button onClick={() => {
-        if (confirmDebugLeave()) nav("/")
-    }}>返回</Button><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
+    const detail = <Content className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
         {user?.role === "ADMIN" && <Button type={debugOpen ? "primary" : "default"} icon={<BugOutlined/>} onClick={() => {
             if (debugOpen && !confirmDebugLeave()) return;
             setDebugOpen(value => !value)
@@ -565,7 +463,8 @@ function ProjectPage() {
                     message={(run.error || cancel.error)?.message}/>}<RunLogs key={latest?.id || id} run={latest}
                                                                                                        onEvents={() => qc.invalidateQueries({queryKey: ["project", id]})}/>
         </Card></Content>;
-    return <Shell className={debugOpen && user?.role === "ADMIN" ? "project-debug-shell" : ""} beforeLeave={confirmDebugLeave}>{debugOpen && user?.role === "ADMIN" ? <Splitter className="project-debug-splitter">
+    return <Shell className={debugOpen && user?.role === "ADMIN" ? "project-debug-shell" : ""}
+                  backTo="/" backLabel="返回项目列表" beforeLeave={confirmDebugLeave}>{debugOpen && user?.role === "ADMIN" ? <Splitter className="project-debug-splitter">
         <Splitter.Panel min="38%" defaultSize="66%">{detail}</Splitter.Panel>
         <Splitter.Panel min={420} collapsible><DebugFilesPanel projectId={id} running={running} onDirtyChange={setDebugDirty}/></Splitter.Panel>
     </Splitter> : detail}</Shell>
@@ -1171,12 +1070,14 @@ function Review() {
         if (open) (kind === "source" ? setSourceDirectoryOpen : setRequirementDirectoryOpen)(true);
         else (kind === "source" ? scheduleSourceDirectoryClose : scheduleRequirementDirectoryClose)()
     };
-    const workspace = (kind: "source" | "requirement", directory: React.ReactNode, documentPane: React.ReactNode) => {
+    const workspace = (kind: "source" | "requirement", directory: React.ReactNode, documentPane: React.ReactNode,
+        toolbar?: React.ReactNode) => {
         const open = kind === "source" ? sourceDirectoryOpen : requirementDirectoryOpen;
         const setOpen = kind === "source" ? setSourceDirectoryOpen : setRequirementDirectoryOpen;
         const label = kind === "source" ? "源文档目录" : "测试需求目录";
         return <div className={`review-workspace review-workspace-${kind}`}>
-            <button type="button" className={`directory-hover-rail${open ? " is-open" : ""}`} aria-label={label}
+            {toolbar}
+            <div className="review-workspace-body"><button type="button" className={`directory-hover-rail${open ? " is-open" : ""}`} aria-label={label}
                     aria-expanded={open}
                     onMouseEnter={() => hoverDirectory(kind, true)} onMouseLeave={() => hoverDirectory(kind, false)}
                     onClick={() => {
@@ -1191,7 +1092,7 @@ function Review() {
             </div>
             <div className="review-workspace-document" onMouseDown={() => {
                 if (kind === "requirement" || !tracePopoverNodeIdRef.current) setOpen(false)
-            }}>{documentPane}</div>
+            }}>{documentPane}</div></div>
         </div>
     };
     const normalizedSearch = reviewSearch.trim().toLowerCase();
@@ -1264,32 +1165,48 @@ function Review() {
         <div><span>项目总编辑用时</span><strong>{formatEditDuration(displayedProjectEditDuration)}</strong></div>
         <small>仅统计文档编辑状态下的有效操作时间</small>
     </div>;
-    const exportActions = <Space>
-        <Popover content={editTimeDetails} trigger={["hover", "click"]} placement="bottomRight">
-            <button type="button" className="edit-time-summary" aria-label="查看编辑用时详情">
-                <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
-            </button>
-        </Popover>
-        {!documentEditing ? <Button ghost className="phase2-edit-button" icon={<EditOutlined/>} disabled={interactionLocked || inlineEditor.isLoading}
-            loading={inlineEditor.isLoading}
-            onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision); setDocumentEditing(true) }}>编辑文档</Button> : <>
-            <Button ghost disabled={interactionLocked} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
+    const changeCount = Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length + referenceOperations.length;
+    const requirementToolbar = <div className="requirement-toolbar">
+        <div className="requirement-toolbar-context"><strong>第三方测试需求</strong>
+            {documentEditing ? <span className="requirement-edit-status">已修改 {changeCount} 项</span> :
+                <><Popover content={editTimeDetails} trigger={["hover", "click"]} placement="bottomRight">
+                        <button type="button" className="edit-time-summary" aria-label="查看编辑用时详情">
+                            <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
+                        </button>
+                    </Popover><button type="button" className={`review-progress-summary ${pendingCount ? "is-pending" : "is-complete"}`}
+                        disabled={interactionLocked} onClick={() => {
+                            setPendingAttention(false);
+                            setReviewCenterOpen(true)
+                        }}>{pendingCount ? <Badge status="warning"/> : <CheckCircleFilled/>}
+                        <span>{pendingCount ? `评审进度 ${reviewedCount}/${reviewItems.length}` : "评审已完成"}</span>
+                    </button></>}
+        </div>
+        <Space wrap className="requirement-toolbar-actions">{!documentEditing ? <>
+            <Button type="primary" className="phase2-edit-button" icon={<EditOutlined/>}
+                    disabled={interactionLocked || inlineEditor.isLoading} loading={inlineEditor.isLoading}
+                    onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision); setDocumentEditing(true) }}>编辑文档</Button>
+            <Tooltip title="下载第三方测试需求 DOCX"><Button icon={<DownloadOutlined/>}
+                    disabled={interactionLocked} loading={downloadRequirements.isPending}
+                    onClick={() => downloadRequirements.mutate()}>下载需求文档</Button></Tooltip>
+            <Dropdown trigger={["click"]} placement="bottomRight" menu={{items: [{
+                key: "reviews", icon: pendingCount ? undefined : <CheckCircleFilled className="review-menu-complete"/>,
+                label: <span className="review-menu-label"><span>评审中心</span>
+                    {pendingCount ? <Tag color="orange">待评 {pendingCount}</Tag> : <span className="review-menu-complete">已完成</span>}</span>,
+                disabled: interactionLocked,
+                onClick: () => { setPendingAttention(false); setReviewCenterOpen(true) }
+            }, {
+                key: "diff", label: "变更分析", disabled: interactionLocked,
+                onClick: () => navigate(`/projects/${id}/requirement-diff`)
+            }]}}><Button icon={<EllipsisOutlined/>} disabled={interactionLocked}>更多</Button></Dropdown>
+        </> : <>
+            <Button disabled={interactionLocked} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
-                disabled={interactionLocked || (!Object.keys(editorDrafts).length && !tableOperations.length && !requirementOperations.length && !referenceOperations.length) || inlineEditor.isLoading || inlineEditor.isFetching}
-                onClick={() => { stopEditActivity(); setVersionName(""); setVersionNameModalOpen(true) }}>保存并重建（{Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length + referenceOperations.length}）</Button>
-        </>}
-        <Button ghost icon={<DownloadOutlined/>} loading={downloadRequirements.isPending}
-                onClick={() => downloadRequirements.mutate()}>下载第三方测试需求</Button>
-        <Button ghost onClick={() => navigate(`/projects/${id}/requirement-diff`)}>变更分析</Button>
-        <Button className={pendingCount ? "review-center-trigger is-pending" : "review-center-trigger is-complete"}
-                icon={pendingCount ? <ExportOutlined/> : <CheckCircleFilled/>} disabled={interactionLocked}
-                onClick={() => {
-                    setPendingAttention(false);
-                    setReviewCenterOpen(true)
-                }}>评审中心 {reviewedCount}/{reviewItems.length}</Button>
-    </Space>;
+                    disabled={interactionLocked || !changeCount || inlineEditor.isLoading || inlineEditor.isFetching}
+                    onClick={() => { stopEditActivity(); setVersionName(""); setVersionNameModalOpen(true) }}>保存并重建（{changeCount}）</Button>
+        </>}</Space>
+    </div>;
     const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
-    return <Shell backTo={`/projects/${id}`} backLabel={`返回 ${data.data?.project.name || "项目"}`} actions={exportActions} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
+    return <Shell backTo={`/projects/${id}`} backLabel={`返回 ${data.data?.project.name || "项目"}`} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
         <div className="review-splitter-reset review-main-reset" onDoubleClick={event => {
             if ((event.target as HTMLElement).closest(".review-splitter-reset") === event.currentTarget && (event.target as HTMLElement).closest(".ant-splitter-bar")) {
                 setMainSizes(["50%", "50%"]);
@@ -1304,7 +1221,7 @@ function Review() {
                 </Splitter.Panel>
                 <Splitter.Panel size={mainSizes?.[1]} defaultSize="50%" min={0}
                                 collapsible={{start: true, showCollapsibleIcon: true}}>
-                    {workspace("requirement", requirementDirectory, requirementDocument)}
+                    {workspace("requirement", requirementDirectory, requirementDocument, requirementToolbar)}
                 </Splitter.Panel>
             </Splitter>
         </div>

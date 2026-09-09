@@ -1,12 +1,13 @@
 import {useMemo, useRef, useState} from "react";
-import {Alert, Button, Empty, Input, Select, Space, Spin, Switch, Tag, Tooltip} from "antd";
-import {ArrowLeftOutlined, ArrowRightOutlined, DownloadOutlined, LogoutOutlined, SwapOutlined} from "@ant-design/icons";
-import {useQuery, useQueryClient} from "@tanstack/react-query";
+import {Alert, Button, Empty, Input, Select, Space, Spin, Switch, Tag} from "antd";
+import {ArrowLeftOutlined, ArrowRightOutlined, DownloadOutlined, SwapOutlined} from "@ant-design/icons";
+import {useQuery} from "@tanstack/react-query";
 import {useNavigate, useParams} from "react-router-dom";
 import {api, downloadApi, saveDownload, type Phase2Chapter, type RequirementChange, type RequirementDiff as Diff, type RequirementDiffAnnotation, type RequirementRevision, type TraceLink} from "./api";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {revisionTime, revisionTitle} from "./revisionDisplay";
 import {changeMatchesKind, diffFacetSummary} from "./diffFilters";
+import {AppHeader} from "./AppHeader";
 
 const LABEL: Record<string, string> = {ADDED: "新增", DELETED: "删除", MODIFIED: "修改", MOVED: "移动", RENUMBERED: "重编号", TRACE_CHANGED: "追溯变化", TABLE_CHANGED: "表格变化"};
 const COLOR: Record<string, string> = {ADDED: "green", DELETED: "red", MODIFIED: "blue", MOVED: "purple", RENUMBERED: "magenta", TRACE_CHANGED: "orange", TABLE_CHANGED: "cyan"};
@@ -32,7 +33,7 @@ const chapterLabel = (change: RequirementChange) => {
 };
 
 export function RequirementDiffPage() {
-    const {id = ""} = useParams(), navigate = useNavigate(), queryClient = useQueryClient(), [fromId, setFromId] = useState<string>(), [toId, setToId] = useState<string>(),
+    const {id = ""} = useParams(), navigate = useNavigate(), [fromId, setFromId] = useState<string>(), [toId, setToId] = useState<string>(),
         [kind, setKind] = useState<string>(), [search, setSearch] = useState(""), [onlyChanged, setOnlyChanged] = useState(true), [selectedUid, setSelectedUid] = useState<string>(),
         leftPane = useRef<HTMLElement>(null), rightPane = useRef<HTMLElement>(null), syncing = useRef(false), programmatic = useRef(false);
     const revisions = useQuery({queryKey: ["requirement-revisions", id], queryFn: () => api<RequirementRevision[]>(`/projects/${id}/requirement-revisions`)});
@@ -97,23 +98,28 @@ export function RequirementDiffPage() {
         requestAnimationFrame(() => syncing.current = false)
     };
     const download = async (revisionId?: string) => { if (!revisionId) return; const result = await downloadApi(`/projects/${id}/requirement-revisions/${revisionId}/docx`); saveDownload(result.blob, result.filename) };
-    const logout = async () => {
-        await api("/auth/logout", {method: "POST"});
-        queryClient.setQueryData(["me"], null);
-        navigate("/login", {replace: true})
-    };
     if (revisions.isLoading) return <Spin fullscreen/>;
     if (revisions.error) return <Alert type="error" message="需求版本加载失败" description={revisions.error.message}/>;
     return <div className="requirement-diff-page">
-        <header className="requirement-diff-header"><Button icon={<ArrowLeftOutlined/>} onClick={() => navigate(`/projects/${id}/review`)}>返回测试需求工作台</Button><h2>第三方测试需求变更分析</h2>
-            <Space className="requirement-diff-actions" size={12} wrap><Select value={actualFrom} options={options} onChange={value => {setFromId(value); setSelectedUid(undefined)}} className="revision-select"/><SwapOutlined className="revision-swap" onClick={() => {setFromId(actualTo); setToId(actualFrom); setSelectedUid(undefined)}}/><Select value={actualTo} options={options} onChange={value => {setToId(value); setSelectedUid(undefined)}} className="revision-select"/>
-                <Button icon={<DownloadOutlined/>} onClick={() => download(actualTo)}>下载右侧版本</Button></Space>
-            <Space className="requirement-diff-global-actions" size={8}>
-                <Tooltip title="下载使用手册"><Button ghost aria-label="下载使用手册" icon={<DownloadOutlined/>}
-                    href="/manuals/Matrix-Req-Manager用户使用手册.pdf" download="Matrix-Req-Manager用户使用手册.pdf"/></Tooltip>
-                <Tooltip title="退出"><Button ghost aria-label="退出" icon={<LogoutOutlined/>} onClick={logout}/></Tooltip>
-            </Space></header>
-        {diff.data?.from.kind === "MIGRATED_BASELINE" && <Alert type="warning" showIcon message="左侧为迁移基线，不一定是项目最初生成版本"/>}
+        <AppHeader backTo={`/projects/${id}/review`} backLabel="返回测试需求工作台"/>
+        <section className="requirement-diff-context-bar">
+            <div className="requirement-diff-title"><h1>变更分析</h1><span>第三方测试需求版本对比</span></div>
+            <div className="diff-version-comparison">
+                <label><span>基准版本</span><Select value={actualFrom} options={options} onChange={value => {
+                    setFromId(value); setSelectedUid(undefined)
+                }} className="revision-select"/></label>
+                <Button type="text" className="revision-swap" aria-label="交换基准版本和对比版本"
+                        icon={<SwapOutlined/>} onClick={() => {
+                    setFromId(actualTo); setToId(actualFrom); setSelectedUid(undefined)
+                }}/>
+                <label><span>对比版本</span><Select value={actualTo} options={options} onChange={value => {
+                    setToId(value); setSelectedUid(undefined)
+                }} className="revision-select"/></label>
+            </div>
+            <Button className="diff-download-button" icon={<DownloadOutlined/>}
+                    onClick={() => download(actualTo)}>下载对比版本</Button>
+        </section>
+        {diff.data?.from.kind === "MIGRATED_BASELINE" && <Alert type="info" showIcon message="当前基准版本为迁移基线，不一定是项目最初生成版本"/>}
         <section className="requirement-diff-toolbar"><Space wrap><Input.Search placeholder="搜索TR编号或标题" allowClear value={search} onChange={event => setSearch(event.target.value)} className="diff-search"/>
             <Select className="diff-type-select" popupMatchSelectWidth={170} allowClear placeholder="全部变更类型" value={kind} onChange={value => {setKind(value); setSelectedUid(undefined)}} options={Object.entries(LABEL).map(([value, label]) => ({value, label}))}/><span>仅显示变化章节</span><Switch checked={onlyChanged} onChange={setOnlyChanged}/>
             <Button icon={<ArrowLeftOutlined/>} disabled={!visible.length} onClick={() => navigateChange(-1)}>上一项</Button><Button icon={<ArrowRightOutlined/>} disabled={!visible.length} onClick={() => navigateChange(1)}>下一项</Button></Space></section>
