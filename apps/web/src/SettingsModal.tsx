@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import {Alert, Button, Form, Input, message, Modal, Space, Spin, Tabs} from "antd";
+import {Alert, Button, Form, Input, message, Modal, Space, Spin, Tabs, Typography} from "antd";
 import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {useNavigate} from "react-router-dom";
 import {api, type CurrentUser} from "./api";
@@ -15,7 +15,9 @@ export function SettingsModal({open, activeTab, user, onTabChange, onClose, befo
     beforeLeave?: () => boolean
 }) {
     const queryClient = useQueryClient(), navigate = useNavigate(), [passwordForm] = Form.useForm(),
-        [userForm] = Form.useForm(), [configContent, setConfigContent] = useState("");
+        [userForm] = Form.useForm(), [configContent, setConfigContent] = useState(""),
+        [savedConfigContent, setSavedConfigContent] = useState<string | null>(null),
+        [configValidationError, setConfigValidationError] = useState<string | null>(null);
     const configQuery = useQuery({
         queryKey: ["opencode-config"],
         queryFn: () => api<{content: string}>("/settings/opencode"),
@@ -49,13 +51,55 @@ export function SettingsModal({open, activeTab, user, onTabChange, onClose, befo
         }),
         onSuccess: result => {
             setConfigContent(result.content);
-            queryClient.setQueryData(["opencode-config"], result);
-            message.success("OpenCode配置已保存并生效")
+            setSavedConfigContent(result.content);
+            setConfigValidationError(null);
+            queryClient.setQueryData(["opencode-config"], result)
         }
     });
     useEffect(() => {
-        if (configQuery.data?.content) setConfigContent(configQuery.data.content)
+        if (typeof configQuery.data?.content === "string") {
+            setConfigContent(configQuery.data.content);
+            setSavedConfigContent(configQuery.data.content)
+        }
     }, [configQuery.data?.content]);
+    const configDirty = savedConfigContent !== null && configContent !== savedConfigContent;
+    const resetConfigFeedback = () => {
+        setConfigValidationError(null);
+        saveConfig.reset()
+    };
+    const saveOpenCodeConfig = () => {
+        try {
+            const parsed = JSON.parse(configContent);
+            if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+                throw new Error("配置根节点必须是JSON对象")
+            }
+        } catch (error) {
+            setConfigValidationError(error instanceof Error ? error.message : "当前内容不是合法JSON");
+            saveConfig.reset();
+            return
+        }
+        setConfigValidationError(null);
+        saveConfig.mutate()
+    };
+    const confirmDiscardConfig = (next: () => void) => {
+        if (saveConfig.isPending) return;
+        if (!configDirty) {
+            next();
+            return
+        }
+        Modal.confirm({
+            title: "放弃未保存的配置修改？",
+            content: "关闭或切换页面后，本次修改将无法恢复。",
+            okText: "放弃修改",
+            cancelText: "继续编辑",
+            okButtonProps: {danger: true},
+            onOk: () => {
+                setConfigContent(savedConfigContent || "");
+                resetConfigFeedback();
+                next()
+            }
+        })
+    };
     const items = [{
         key: "password", label: "修改密码", children: <Form form={passwordForm} layout="vertical"
             onFinish={values => {
@@ -92,21 +136,41 @@ export function SettingsModal({open, activeTab, user, onTabChange, onClose, befo
         key: "opencode", label: "OpenCode配置", children: <div><Alert type="warning" showIcon
             message="配置中可能包含明文API Key，仅管理员可以查看和修改。保存时会自动保留Matrix插件。"/>
             {configQuery.isLoading ? <Spin/> : <><Input.TextArea className="opencode-config-editor" rows={20}
-                value={configContent} onChange={event => setConfigContent(event.target.value)} spellCheck={false}/>
+                value={configContent} onChange={event => {
+                    setConfigContent(event.target.value);
+                    resetConfigFeedback()
+                }} spellCheck={false}/>
                 {configQuery.error && <Alert type="error" showIcon message={configQuery.error.message}/>}
-                {saveConfig.error && <Alert type="error" showIcon message={saveConfig.error.message}/>}<Space>
-                    <Button onClick={() => {
+                {configValidationError && <Alert className="opencode-config-feedback" type="error" showIcon
+                    message="无法保存：JSON格式有误" description={configValidationError}/>}
+                {saveConfig.isPending && <Alert className="opencode-config-feedback" type="info" showIcon
+                    message="正在保存并应用配置"
+                    description="正在等待 OpenCode 服务重新加载并通过健康检查，通常只需数秒，最长可能需要30秒。"/>}
+                {saveConfig.isSuccess && <Alert className="opencode-config-feedback" type="success" showIcon closable
+                    message="配置已保存并应用" description="OpenCode 服务已完成重新加载，后续启动的任务将使用新配置。"
+                    onClose={() => saveConfig.reset()}/>}
+                {saveConfig.error && <Alert className="opencode-config-feedback" type="error" showIcon
+                    message="配置未能成功应用" description={saveConfig.error.message}/>}<div className="opencode-config-actions">
+                    <Space><Button disabled={saveConfig.isPending} onClick={() => {
                         try {
-                            setConfigContent(JSON.stringify(JSON.parse(configContent), null, 2) + "\n")
-                        } catch {
-                            message.error("当前内容不是合法JSON")
+                            const formatted = JSON.stringify(JSON.parse(configContent), null, 2) + "\n";
+                            setConfigContent(formatted);
+                            resetConfigFeedback()
+                        } catch (error) {
+                            setConfigValidationError(error instanceof Error ? error.message : "当前内容不是合法JSON")
                         }
                     }}>格式化JSON</Button><Button type="primary" loading={saveConfig.isPending}
-                                              onClick={() => saveConfig.mutate()}>保存并应用</Button>
-                </Space></>}
+                        disabled={!configDirty || configQuery.isError}
+                        onClick={saveOpenCodeConfig}>{saveConfig.isPending ? "正在应用" : "保存并应用"}</Button></Space>
+                    {!saveConfig.isPending && !saveConfig.isSuccess && <Typography.Text type={configDirty ? "warning" : "secondary"}>
+                        {configDirty ? "有未保存的修改" : "当前配置已同步"}
+                    </Typography.Text>}
+                </div></>}
         </div>
     }] : [])];
-    return <Modal open={open} title="设置" width={760} footer={null} destroyOnHidden onCancel={onClose}>
-        <Tabs activeKey={activeTab} onChange={key => onTabChange(key as SettingsTab)} items={items}/>
+    return <Modal open={open} title="设置" width={760} footer={null} destroyOnHidden
+        closable={!saveConfig.isPending} keyboard={!saveConfig.isPending} maskClosable={!saveConfig.isPending}
+        onCancel={() => confirmDiscardConfig(onClose)}>
+        <Tabs activeKey={activeTab} onChange={key => confirmDiscardConfig(() => onTabChange(key as SettingsTab))} items={items}/>
     </Modal>
 }

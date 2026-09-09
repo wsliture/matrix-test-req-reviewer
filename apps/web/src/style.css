@@ -140,6 +140,24 @@ html, body, #root {
     tab-size: 2
 }
 
+.opencode-config-feedback {
+    margin-bottom: 12px
+}
+
+.opencode-config-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px
+}
+
+@media (max-width: 640px) {
+    .opencode-config-actions {
+        align-items: flex-start;
+        flex-direction: column-reverse
+    }
+}
+
 .shell.project-debug-shell {
     height: 100dvh;
     min-height: 0;
@@ -365,14 +383,21 @@ html, body, #root {
 
 .run-log {
     gap: 12px;
+    justify-content: flex-start !important;
     color: #dbeafe !important;
     border-block-end-color: #273449 !important;
     font-family: Consolas, "Microsoft YaHei", monospace
 }
 
 .run-log-time {
-    flex: 0 0 82px;
-    color: #94a3b8
+    flex: 0 0 142px;
+    color: #94a3b8;
+    white-space: nowrap
+}
+
+.run-log > span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere
 }
 
 .run-log.success span:last-child {
@@ -387,6 +412,18 @@ html, body, #root {
     padding: 28px;
     text-align: center;
     color: #94a3b8
+}
+
+@media (max-width: 640px) {
+    .run-log {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px
+    }
+
+    .run-log-time {
+        flex-basis: auto
+    }
 }
 
 .review {
