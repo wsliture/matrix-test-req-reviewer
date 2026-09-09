@@ -20,6 +20,9 @@ import {safeExtract} from "./archive.js";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
 import {Prisma} from "@prisma/client";
+import {selectCurrentActivity} from "./project-activity.js";
+import {buildPhase2Document} from "./phase2-document.js";
+import {calculateReviewSummary} from "./review-summary.js";
 
 const documentQueue = new Queue("document-index", {connection: new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null})});
 
@@ -41,8 +44,13 @@ export class ProjectsService {
     list() {
         return readWithRunClock(this.db, async (tx, now) => (await tx.project.findMany({
             orderBy: [{createdAt: "desc"}, {id: "desc"}],
-            include: {runs: {orderBy: {startedAt: "desc"}, take: 1}, documents: true}
-        })).map(project => ({...project, runs: project.runs.map(run => withElapsed(run, now))})))
+            include: {runs: {orderBy: {startedAt: "desc"}, take: 1},
+                editRuns: {orderBy: {createdAt: "desc"}, take: 1}, documents: true}
+        })).map(project => {
+            const {editRuns, ...visible} = project;
+            return {...visible, runs: project.runs.map(run => withElapsed(run, now)),
+                currentActivity: selectCurrentActivity(project.status, project.runs[0], editRuns[0])}
+        }))
     }
 
     async get(id: string) {
@@ -52,7 +60,21 @@ export class ProjectsService {
                 include: {documents: true, runs: {orderBy: {startedAt: "desc"}}}
             });
             if (!project) throw new NotFoundException("项目不存在或已被删除");
-            return {...project, runs: project.runs.map(run => withElapsed(run, now))}
+            let reviewSummary = null;
+            if (project.status === "READY_FOR_REVIEW") {
+                try {
+                    const [requirements, reviews] = await Promise.all([
+                        tx.testRequirementNode.findMany({where: {projectId: id}}),
+                        tx.review.findMany({where: {projectId: id, invalidatedAt: null}, select: {nodeId: true}})
+                    ]);
+                    const document = await buildPhase2Document(project.workspacePath, requirements);
+                    reviewSummary = calculateReviewSummary(document, reviews)
+                } catch {
+                    // Older or incomplete workspaces may not have a renderable formal Phase 2 document.
+                    reviewSummary = null
+                }
+            }
+            return {...project, runs: project.runs.map(run => withElapsed(run, now)), reviewSummary}
         })
     }
 

@@ -63,6 +63,7 @@ import {
     ApiError,
     downloadApi,
     type CurrentUser,
+    type CurrentActivity,
     type EditTimeSummary,
     type Phase2Run,
     type TokenUsage,
@@ -89,6 +90,7 @@ import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonC
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
 import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
+import {activityPresentation, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
 
 const {Header, Content, Sider} = Layout;
 
@@ -148,10 +150,10 @@ function SessionExpired({onLogin}: {onLogin: () => void}) {
         extra={<Button type="primary" size="large" onClick={onLogin}>重新登录</Button>}/></div>
 }
 
-function Shell({children, backTo, actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; backTo?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
+function Shell({children, backTo, backLabel = "返回项目", actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; backTo?: string; backLabel?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
     const nav = useNavigate(), qc = useQueryClient();
     return <Layout className={`shell ${className}`}>{!hideHeader && <Header className="header"><b>Matrix测试需求管理</b>{backTo &&
-        <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>返回项目</Button>}<span
+        <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => { if (!beforeLeave || beforeLeave()) nav(backTo) }}>{backLabel}</Button>}<span
         className="grow"/>{actions}<Button ghost icon={<DownloadOutlined/>}
         href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
         download="Matrix-Req-Manager用户使用手册.pdf">下载使用手册</Button><Button
@@ -166,7 +168,8 @@ function Shell({children, backTo, actions, beforeLeave, hideHeader = false, clas
 function Projects() {
     const qc = useQueryClient(), nav = useNavigate(), user = qc.getQueryData<CurrentUser>(["me"]), query = useQuery({
         queryKey: ["projects"],
-        queryFn: () => api<Project[]>("/projects")
+        queryFn: () => api<Project[]>("/projects"),
+        refetchInterval: query => projectsNeedPolling(query.state.data) ? 3000 : false
     }), [open, setOpen] = useState(false), [archiveFile, setArchiveFile] = useState<File | null>(null),
         [createForm] = Form.useForm(), [settingsOpen, setSettingsOpen] = useState(false),
         [passwordForm] = Form.useForm(), [userForm] = Form.useForm(),
@@ -300,8 +303,7 @@ function Projects() {
                                                                                                      loading={remove.isPending && remove.variables === p.id}
                                                                                                      onClick={event => event.stopPropagation()}/></Popconfirm></Space>
                                                                                              </div>}>
-        <p>创建时间：{localMinute(p.createdAt)}</p><p>最新任务：{p.runs[0]?.status || "无"}</p><Progress
-        percent={p.runs[0]?.progress || 0}/></Card></Col>)}</Row><Modal open={open} title="新建项目"
+        <p>创建时间：{localMinute(p.createdAt)}</p><ProjectActivity activity={p.currentActivity}/></Card></Col>)}</Row><Modal open={open} title="新建项目"
         okText="创建项目" cancelText="取消" confirmLoading={upload.isPending}
         onCancel={() => {
             setOpen(false);
@@ -331,13 +333,14 @@ function Projects() {
 }
 
 function Status({value}: { value: string }) {
-    const colors: Record<string, string> = {
-        READY_FOR_REVIEW: "green",
-        GENERATING: "blue",
-        FAILED: "red",
-        INCOMPLETE_MATRIX: "orange"
-    };
-    return <Tag color={colors[value] || "default"}>{value}</Tag>
+    const presentation = PROJECT_STATUS[value], tag = <Tag color={presentation?.color || "default"}>{presentation?.label || "未知状态"}</Tag>;
+    return presentation ? tag : <Tooltip title={`内部状态：${value}`}>{tag}</Tooltip>
+}
+
+function ProjectActivity({activity}: {activity?: CurrentActivity | null}) {
+    const presentation = activityPresentation(activity);
+    return <><p>{presentation.text}</p><Progress percent={presentation.percent}
+        status={presentation.progressStatus} strokeColor={presentation.strokeColor}/></>
 }
 
 const CHAPTERS = [
@@ -355,60 +358,6 @@ const CHAPTERS = [
     ["4.9：强度测试", "finalize_strength_test_content", "strength-test-content.json"],
     ["测试需求追溯关系", "generate_phase2_traceability", "phase2-test-traceability.json"]
 ] as const;
-
-const STAGE_NAMES: Record<string, string> = {
-    backup: "创建发布快照",
-    apply: "保存编辑稿",
-    saved: "编辑稿已保存",
-    resume_publish: "重新发布已保存编辑稿",
-    retry_apply: "重新应用保留的编辑内容",
-    index: "更新测试需求索引",
-    publish_failed: "发布失败",
-    discover_documents: "识别源文档",
-    prepare_document_artifacts: "准备文档工件",
-    prepare_chapter1_scope: "准备第一章：范围",
-    finalize_chapter1_scope: "生成第一章：范围",
-    prepare_chapter2_system_overview: "准备第二章：系统概述",
-    finalize_chapter2_system_overview: "生成第二章：系统概述",
-    discover_hardware_interface_candidates: "识别硬件接口",
-    prepare_hardware_interface_batches: "准备硬件接口",
-    merge_hardware_interface_blocks: "合并硬件接口",
-    finalize_hardware_interface: "生成第三章：硬件接口",
-    prepare_functional_title_tree: "准备功能标题树",
-    finalize_functional_title_tree: "生成功能标题树",
-    prepare_functional_init_content: "准备初始化功能需求",
-    finalize_functional_init_content: "生成初始化功能需求",
-    prepare_functional_other_content: "准备非初始化功能需求",
-    get_functional_other_content_worker_batch: "准备非初始化功能需求",
-    finalize_functional_other_content: "生成非初始化功能需求",
-    finalize_functional_test_content: "生成4.1：功能测试",
-    prepare_performance_test_content: "准备性能测试",
-    finalize_performance_test_content: "生成4.2：性能测试",
-    prepare_interface_test_content: "准备接口测试",
-    finalize_interface_test_content: "生成4.3：接口测试",
-    prepare_reliability_safety_test_content: "准备可靠性安全性测试",
-    finalize_reliability_safety_test_content: "生成4.4：可靠性安全性测试",
-    prepare_margin_test_content: "准备余量测试",
-    finalize_margin_test_content: "生成4.5：余量测试",
-    prepare_boundary_test_content: "准备边界测试",
-    finalize_boundary_test_content: "生成4.6：边界测试",
-    prepare_data_processing_test_content: "准备数据处理测试",
-    finalize_data_processing_test_content: "生成4.7：数据处理测试",
-    prepare_recovery_test_content: "准备恢复性测试",
-    finalize_recovery_test_content: "生成4.8：恢复性测试",
-    prepare_strength_test_content: "准备强度测试",
-    finalize_strength_test_content: "生成4.9：强度测试",
-    generate_phase2_traceability: "生成测试需求追溯关系",
-    finalize_phase2_document: "生成最终测试需求文档"
-};
-
-function stageName(value: string, batchIndex?: unknown) {
-    const [mode, encodedIndex] = value.split(":", 2), index = Number(batchIndex ?? encodedIndex);
-    if (mode === "get_functional_other_content_worker_batch") {
-        return Number.isInteger(index) && index > 0 ? `准备第${index}个非初始化功能需求` : "准备非初始化功能需求"
-    }
-    return STAGE_NAMES[mode] || mode
-}
 
 function eventText(item: RunEvent) {
     const mode = String(item.payload.mode || ""), stage = stageName(mode, item.payload.batchIndex);
@@ -590,8 +539,11 @@ function ProjectPage() {
             if (debugOpen && !confirmDebugLeave()) return;
             setDebugOpen(value => !value)
         }}>{debugOpen ? "关闭调试模式" : "调试模式"}</Button>}</Space><ChapterStatus project={p} run={latest}/>
-        {p.status === "READY_FOR_REVIEW" &&
-            <Button type="primary" onClick={() => nav(`/projects/${id}/review`)}>进入评审</Button>}
+        {p.status === "READY_FOR_REVIEW" && <div className="project-workbench-entry">
+            <div><b>{reviewSummaryText(p.reviewSummary)}</b>
+                <span>可查看、编辑、评审、执行变更分析并导出第三方测试需求</span></div>
+            <Button type="primary" onClick={() => nav(`/projects/${id}/review`)}>打开测试需求工作台</Button>
+        </div>}
         <Card title="Phase 2测试需求生成"><Progress percent={latest?.progress || 0}
                                                     status={latest?.status === "FAILED" ? "exception" : running ? "active" : "normal"}/>
             <p>当前阶段：{latest?.status === "CANCELLED" ? "已终止" : latest?.currentStage ? stageName(latest.currentStage) : running ? "任务启动中" : latest?.status === "FAILED" ? "生成失败" : "尚未开始"}</p>
@@ -990,7 +942,7 @@ function Review() {
         },
         onSuccess: result => {
             saveDownload(result.blob, result.filename);
-            message.success("评审报告导出完成")
+            message.success("评审报告下载完成")
         },
         onError: error => {
             if (error instanceof ApiError && error.status === 409 && Array.isArray(error.details?.missingReviews)) {
@@ -1269,6 +1221,7 @@ function Review() {
             setReviewFilter("pending");
             setReviewSearch("");
             setPendingAttention(true);
+            reviewMessage.warning(`还有 ${pendingCount} 项未评审，完成后即可下载评审报告`);
             return
         }
         exportReport.mutate()
@@ -1336,7 +1289,7 @@ function Review() {
                 }}>评审中心 {reviewedCount}/{reviewItems.length}</Button>
     </Space>;
     const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
-    return <Shell backTo={`/projects/${id}`} actions={exportActions} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
+    return <Shell backTo={`/projects/${id}`} backLabel={`返回 ${data.data?.project.name || "项目"}`} actions={exportActions} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
         <div className="review-splitter-reset review-main-reset" onDoubleClick={event => {
             if ((event.target as HTMLElement).closest(".review-splitter-reset") === event.currentTarget && (event.target as HTMLElement).closest(".ant-splitter-bar")) {
                 setMainSizes(["50%", "50%"]);
@@ -1497,10 +1450,18 @@ function Review() {
         {saveInlineEdit.error && <Alert type="error" showIcon message="提交失败" description={saveInlineEdit.error.message}/>}
         <Drawer className="review-center-drawer" width={520} title="评审中心" open={reviewCenterOpen}
                 onClose={() => setReviewCenterOpen(false)}
-                footer={<Button block type={pendingCount ? "default" : "primary"} icon={<ExportOutlined/>}
-                                loading={exportReport.isPending} onClick={handleReviewExport}>
-                    {pendingCount ? `还需完成 ${pendingCount} 项评审` : "导出评审报告"}
-                </Button>}>
+                footer={<div className="review-center-footer">
+                    {pendingCount > 0 && <div className="review-center-export-hint">
+                        <span><InfoCircleOutlined/>还有 {pendingCount} 项未评审，完成后即可下载报告</span>
+                        <Button type="link" size="small" onClick={() => {
+                            setReviewFilter("pending");
+                            setReviewSearch("");
+                            setPendingAttention(true)
+                        }}>查看待评项</Button>
+                    </div>}
+                    <Button block type={pendingCount ? "default" : "primary"} icon={<DownloadOutlined/>}
+                            loading={exportReport.isPending} onClick={handleReviewExport}>下载评审报告</Button>
+                </div>}>
             <div className="review-center-summary">
                 <div><b>{reviewPercent}%</b><span>总体完成率</span></div>
                 <div><b>{reviewedCount}</b><span>已评</span></div>

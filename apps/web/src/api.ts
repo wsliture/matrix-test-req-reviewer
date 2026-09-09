@@ -85,6 +85,8 @@ export type Project = {
     name: string;
     createdAt: string;
     status: string;
+    currentActivity?: CurrentActivity | null;
+    reviewSummary?: ReviewSummary | null;
     missingArtifacts?: string[];
     runs: Phase2Run[];
     documents: { id: string; name: string; parseStatus?: string; parseError?: string }[]
@@ -99,6 +101,21 @@ export type DebugTreeNode = {
     modifiedAt?: string;
     version?: string;
     children?: DebugTreeNode[]
+};
+export type ReviewSummary = {
+    total: number;
+    reviewed: number;
+    pending: number;
+    progress: number;
+    status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED"
+};
+export type CurrentActivity = {
+    type: "GENERATION" | "PUBLISH";
+    status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+    stage?: string;
+    progress: number;
+    startedAt?: string;
+    finishedAt?: string
 };
 
 export type DebugFile = {
@@ -197,6 +214,7 @@ export type Phase2Chapter = {
     blocks: Phase2Block[]
 };
 export type ReviewData = {
+    project: {id: string; name: string};
     documents: ({ id: string; name: string; parseStatus: string; parseError?: string; nodes: DocumentNode[] })[];
     requirements: RequirementNode[];
     links: TraceLink[];

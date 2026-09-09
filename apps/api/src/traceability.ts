@@ -23,7 +23,7 @@ export class TraceabilityService {
             })
         ]);
         const phase2Document = await buildPhase2Document(project.workspacePath, requirements);
-        return {documents, requirements, links, phase2Document}
+        return {project: {id: project.id, name: project.name}, documents, requirements, links, phase2Document}
     }
 
     async links(projectId: string, sourceNodeId: string, includeDescendants: boolean) {

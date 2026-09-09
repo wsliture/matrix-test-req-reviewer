@@ -105,7 +105,7 @@ export function RequirementDiffPage() {
     if (revisions.isLoading) return <Spin fullscreen/>;
     if (revisions.error) return <Alert type="error" message="需求版本加载失败" description={revisions.error.message}/>;
     return <div className="requirement-diff-page">
-        <header className="requirement-diff-header"><Button icon={<ArrowLeftOutlined/>} onClick={() => navigate(`/projects/${id}/review`)}>返回评审</Button><h2>第三方测试需求变更分析</h2>
+        <header className="requirement-diff-header"><Button icon={<ArrowLeftOutlined/>} onClick={() => navigate(`/projects/${id}/review`)}>返回测试需求工作台</Button><h2>第三方测试需求变更分析</h2>
             <Space className="requirement-diff-actions" size={12} wrap><Select value={actualFrom} options={options} onChange={value => {setFromId(value); setSelectedUid(undefined)}} className="revision-select"/><SwapOutlined className="revision-swap" onClick={() => {setFromId(actualTo); setToId(actualFrom); setSelectedUid(undefined)}}/><Select value={actualTo} options={options} onChange={value => {setToId(value); setSelectedUid(undefined)}} className="revision-select"/>
                 <Button icon={<DownloadOutlined/>} onClick={() => download(actualTo)}>下载右侧版本</Button></Space>
             <Space className="requirement-diff-global-actions" size={8}>
