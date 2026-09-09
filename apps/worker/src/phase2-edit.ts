@@ -3,7 +3,7 @@ import type {Redis} from "ioredis";
 import type {Pool} from "pg";
 import {cp, mkdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
-import {indexProject} from "./indexing.js";
+import {indexAvailableRequirements, indexProject} from "./indexing.js";
 import {assertRequirementBaselineForRebuild, createRequirementRevision, ensureRequirementBaselineForEdit, removeRequirementRevision} from "./requirement-revisions.js";
 
 const auth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
@@ -101,6 +101,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         let backupPath = "";
         let publishedRevisionId = "";
         let editSaved = Boolean(row.savedAt);
+        let generationMode = false;
         const rebuildOnly = job.data.rebuildOnly === true;
         const stageTimings: Record<string, {startedAt: string; finishedAt: string; durationMs: number}> = {};
         const timed = async <T>(stage: string, work: () => Promise<T>) => {
@@ -114,6 +115,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         try {
             const request = typeof row.request === "string" ? JSON.parse(row.request) : row.request;
             const batch = row.operation === "batch";
+            generationMode = request.generation_mode === true;
             let applied: any;
             if (rebuildOnly) {
                 await assertRequirementBaselineForRebuild(db, row.projectId);
@@ -123,7 +125,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 if (!applied) throw new Error("缺少已保存编辑稿的发布上下文")
             } else {
                 await db.query(`update "Phase2EditRun" set status='RUNNING',"startedAt"=now(),"currentStage"='backup',progress=5 where id=$1`, [runId]);
-                await timed("baseline", () => ensureRequirementBaselineForEdit(db, {
+                if (!generationMode) await timed("baseline", () => ensureRequirementBaselineForEdit(db, {
                     projectId: row.projectId, workspace: row.workspacePath, userId: row.userId
                 }));
                 const mutation = await call<{files?: string[]}>("/v1/phase2/editor/mutation-files", request);
@@ -145,15 +147,25 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 if (paths.some(value => !String(value).endsWith("functional-init-content.raw.json"))) functionalModes.push("finalize_functional_other_content");
                 modes.unshift(...functionalModes)
             }
-            const all = [...modes, "generate_phase2_traceability", "finalize_phase2_document"];
+            const all = generationMode ? modes : [...modes, "generate_phase2_traceability", "finalize_phase2_document"];
             for (let i = 0; i < all.length; i++) {
                 await db.query(`update "Phase2EditRun" set "currentStage"=$1,progress=$2 where id=$3`, [all[i], 15 + Math.floor(i / all.length * 70), runId]);
                 await timed(all[i], () => call("/v1/phase2/workflow/execute", {directory: row.workspacePath, mode: all[i], editor_fast_path: true}))
             }
-            const total = path.join(row.workspacePath, ".matrix", "reports", "phase2-test-requirements.docx");
-            if ((await stat(total)).size === 0) throw new Error("重建后的总DOCX为空");
+            if (!generationMode) {
+                const total = path.join(row.workspacePath, ".matrix", "reports", "phase2-test-requirements.docx");
+                if ((await stat(total)).size === 0) throw new Error("重建后的总DOCX为空")
+            }
             await db.query(`update "Phase2EditRun" set "currentStage"='index',progress=90 where id=$1`, [runId]);
-            await timed("index", () => indexProject(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [], {skipDocuments: true}));
+            await timed("index", () => generationMode
+                ? indexAvailableRequirements(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [])
+                : indexProject(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [], {skipDocuments: true}));
+            if (generationMode) {
+                await db.query(`update "Phase2EditRun" set status='SUCCEEDED',progress=100,"currentStage"='deferred_analysis',"publishedAt"=now(),"finishedAt"=now() where id=$1`, [runId]);
+                await db.query(`insert into "AuditLog" ("userId",action,"resourceType","resourceId",detail) values ($1,'PHASE2_EDIT_SAVED_DURING_GENERATION','Phase2EditRun',$2,$3)`,
+                    [row.userId, runId, JSON.stringify({artifacts, deferredAnalysis: true})]);
+                return {ok: true, deferredAnalysis: true}
+            }
             await db.query(`update "Phase2EditRun" set "currentStage"='snapshot',progress=96 where id=$1`, [runId]);
             const publishedRevision: any = await timed("snapshot", () => createRequirementRevision(db, {
                 projectId: row.projectId, workspace: row.workspacePath, kind: "PUBLISHED", userId: row.userId,
@@ -178,9 +190,10 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 if (publishedRevisionId) await removeRequirementRevision(db, publishedRevisionId);
                 if (backupPath) {
                     await restorePhase2Edit(row.workspacePath, backupPath);
-                    await indexProject(db, row.projectId, row.workspacePath, [], {skipDocuments: true})
+                    if (generationMode) await indexAvailableRequirements(db, row.projectId, row.workspacePath);
+                    else await indexProject(db, row.projectId, row.workspacePath, [], {skipDocuments: true})
                 }
-                await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
+                if (!generationMode) await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
                 const detail = editSaved ? `${message}（编辑稿已保存，继续使用上一发布版本）` : `${message}（修改未保存，上一发布版本未受影响）`;
                 await db.query(`update "Phase2EditRun" set status='FAILED',"currentStage"='publish_failed',"errorMessage"=$1,"finishedAt"=now() where id=$2`, [detail, runId])
             } catch (rollbackError) {

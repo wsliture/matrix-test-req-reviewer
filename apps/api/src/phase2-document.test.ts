@@ -47,6 +47,16 @@ describe("system overview table rendering", () => {
 });
 
 describe("chapter 1 and chapter 2 presentation contracts", () => {
+    it("renders only available chapters while generation is incomplete", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-partial-document-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        await writeFile(path.join(dataDir, "chapter1-scope.json"), JSON.stringify({document_id: "DOC-1", references: []}));
+        const document = await buildPhase2Document(workspace, []);
+        expect(document.chapters.map(chapter => chapter.number)).toEqual(["1"]);
+        expect(document.chapters.flatMap(chapter => chapter.blocks).some(block => block.type === "error")).toBe(false)
+    });
+
     it("prepends fixed references and programming conventions and deduplicates by document id", () => {
         const references = chapter1DisplayReferences({
             programming_languages: ["mcs51_assembly", "c", "x86_assembly", "c"],

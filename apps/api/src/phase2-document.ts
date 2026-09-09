@@ -512,7 +512,8 @@ export async function buildPhase2DocumentFromDataDir(dataDir: string, requiremen
             else if (number === "6") blocks = traceability(data, artifact, lookup);
             else blocks = nonFunctional(data, artifact, number, title, lookup);
             chapters.push({artifact, number, title, rootNodeId: lookup.root(artifact)?.id, blocks})
-        } catch (error) {
+        } catch (error: any) {
+            if (error?.code === "ENOENT") continue;
             chapters.push({
                 artifact,
                 number,

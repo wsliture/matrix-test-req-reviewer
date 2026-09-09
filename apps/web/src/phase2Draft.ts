@@ -9,6 +9,7 @@ export type Phase2LocalDraft = {
     requirementOperations: Phase2RequirementOperation[];
     referenceOperations: Phase2ReferenceOperation[];
     expectedRevision?: string;
+    expectedArtifactRevisions?: Record<string, string>;
     editRunId?: string;
 };
 

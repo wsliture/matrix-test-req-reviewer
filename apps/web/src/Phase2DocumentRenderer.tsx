@@ -27,6 +27,7 @@ type Props = {
     onReferenceOperation?: (operation: Phase2ReferenceOperation) => void;
     onEditActivityEnd?: () => void;
     readOnly?: boolean;
+    evaluationDisabled?: boolean;
     interactionLocked?: boolean;
     availableTables?: SourceTableOption[];
     availableSourceRefs?: SourceRefOption[];
@@ -215,7 +216,7 @@ function DiffText({annotation, businessId}: {annotation: RequirementDiffAnnotati
         {visible.map((segment, index) => <span key={index} className={segment.type === "DELETE" ? "diff-text-delete" : segment.type === "INSERT" ? "diff-text-insert" : undefined}>{segment.text}</span>)}</>
 }
 
-function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, availableTables, availableSourceRefs}: {
+function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, availableTables, availableSourceRefs}: {
     block: Phase2Block;
     links: TraceLink[];
     activeId?: string;
@@ -232,6 +233,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     referenceOperations?: Phase2ReferenceOperation[]; onReferenceOperation?: Props["onReferenceOperation"];
     onEditActivityEnd?: Props["onEditActivityEnd"];
     readOnly?: boolean;
+    evaluationDisabled?: boolean;
     availableTables?: SourceTableOption[];
     availableSourceRefs?: SourceRefOption[];
 }) {
@@ -439,7 +441,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
             </div>
                 <div className="phase2-heading-actions">{mode === "review" && block.evaluable && block.anchorId &&
                     <Button type="primary" icon={<AuditOutlined/>} className="evaluation-trigger"
-                            disabled={readOnly} onClick={() => onEvaluate(block.anchorId!)}>
+                            disabled={readOnly || evaluationDisabled} onClick={() => onEvaluate(block.anchorId!)}>
                         内容质量评估{reviewScores?.[block.anchorId] !== undefined ? ` · 已评 ${reviewScores[block.anchorId].toFixed(2)}` : ""}
                     </Button>}</div></div>
             <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} editing={editing} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
@@ -553,7 +555,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     </div>
 }
 
-export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, interactionLocked, availableTables, availableSourceRefs}: Props) {
+export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, interactionLocked, availableTables, availableSourceRefs}: Props) {
     const documentRef = useRef<HTMLElement>(null);
     useEffect(() => {
         if (interactionLocked && documentRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement)?.blur()
@@ -583,6 +585,6 @@ export function Phase2DocumentRenderer({chapters, links, activeId, mode = "revie
                                                          requirementOperations={requirementOperations} onRequirementOperation={onRequirementOperation}
                                                          referenceOperations={referenceOperations} onReferenceOperation={onReferenceOperation}
                                                          onEditActivityEnd={onEditActivityEnd}
-                                                         readOnly={readOnly} availableTables={availableTables} availableSourceRefs={availableSourceRefs}/>)}</div>)}
+                                                         readOnly={readOnly} evaluationDisabled={evaluationDisabled} availableTables={availableTables} availableSourceRefs={availableSourceRefs}/>)}</div>)}
     </article>
 }

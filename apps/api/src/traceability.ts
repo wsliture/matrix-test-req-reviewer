@@ -8,7 +8,9 @@ export class TraceabilityService {
     }
 
     async reviewData(projectId: string) {
-        const project = await this.db.project.findUnique({where: {id: projectId}});
+        const project = await this.db.project.findUnique({where: {id: projectId}, include: {
+            runs: {orderBy: {startedAt: "desc"}, take: 1}
+        }});
         if (!project) throw new NotFoundException("项目不存在");
         const [documents, requirements, links] = await Promise.all([
             this.db.document.findMany({
@@ -23,7 +25,13 @@ export class TraceabilityService {
             })
         ]);
         const phase2Document = await buildPhase2Document(project.workspacePath, requirements);
-        return {project: {id: project.id, name: project.name}, documents, requirements, links, phase2Document}
+        const run = project.runs[0];
+        const generation = run ? {
+            runId: run.id, status: run.status, currentStage: run.currentStage,
+            completedStages: run.completedStages, progress: run.progress
+        } : null;
+        return {project: {id: project.id, name: project.name, status: project.status}, documents, requirements, links,
+            phase2Document, generation}
     }
 
     async links(projectId: string, sourceNodeId: string, includeDescendants: boolean) {

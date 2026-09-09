@@ -385,3 +385,20 @@ export async function indexProject(db: Pool, projectId: string, workspace: strin
         throw error
     } finally { client.release() }
 }
+
+/** Refresh only the currently available Phase 2 requirement artifacts.
+ * Source documents are indexed independently when the project is uploaded, so
+ * chapter publication must not invalidate their preview cache. */
+export async function indexAvailableRequirements(db: Pool, projectId: string, workspace: string, renames: RequirementIdRename[] = []) {
+    const client = await db.connect();
+    try {
+        await client.query("begin");
+        const projectLock = await client.query('select id from "Project" where id=$1 for update', [projectId]);
+        if (!projectLock.rowCount) throw new Error(`无法索引不存在的项目：${projectId}`);
+        await indexRequirements(client, projectId, workspace, renames);
+        await client.query("commit")
+    } catch (error) {
+        await client.query("rollback");
+        throw error
+    } finally { client.release() }
+}

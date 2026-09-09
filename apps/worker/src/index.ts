@@ -6,7 +6,7 @@ import {createOpencodeClient, type Event, type ToolPart} from "@opencode-ai/sdk/
 import {access, readFile, stat} from "node:fs/promises";
 import path from "node:path";
 import {missingCompletionStages, parseToolOutput, progressOf} from "./progress.js";
-import {indexProject} from "./indexing.js";
+import {indexAvailableRequirements, indexProject} from "./indexing.js";
 import {startPhase2EditWorker} from "./phase2-edit.js";
 import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
 import {addUsage, emptyTokenUsage, normalizeTokens, SessionUsageTracker, type TokenUsage} from "./token-usage.js";
@@ -35,6 +35,7 @@ const STAGE_ARTIFACTS: Record<string, string> = {
     finalize_strength_test_content: "strength-test-content.json",
     generate_phase2_traceability: "phase2-test-traceability.json"
 };
+const INCREMENTAL_CHAPTER_STAGES = new Set(Object.keys(STAGE_ARTIFACTS));
 async function configuredModel() {
     const configPath = process.env.OPENCODE_CONFIG_PATH || "/opencode-config/opencode.json";
     try {
@@ -224,6 +225,13 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
     const progress = progressOf(completed);
     const completedStage = Number.isInteger(batchIndex) && batchIndex! > 0 ? `${actual}:${batchIndex}` : actual;
     await update(runId, {stage: completedStage, progress, completed});
+    if (actual === "prepare_document_artifacts" || INCREMENTAL_CHAPTER_STAGES.has(actual)) {
+        const projectRow = (await db.query('select "projectId" from "Phase2Run" where id=$1', [runId])).rows[0];
+        if (projectRow?.projectId) {
+            if (actual === "prepare_document_artifacts") await indexProject(db, projectRow.projectId, workspace);
+            else await indexAvailableRequirements(db, projectRow.projectId, workspace)
+        }
+    }
     await event(runId, "stage.completed", {
         mode: actual,
         batchIndex,

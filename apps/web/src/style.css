@@ -307,13 +307,34 @@ html, body, #root {
 }
 
 .chapter-status-row {
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
     border: 1px solid #e4eaf1;
     border-radius: 6px;
-    background: #fafcff
+    background: #fafcff;
+    color: inherit;
+    font: inherit;
+    text-align: left
+}
+
+.chapter-status-row:disabled {
+    cursor: default
+}
+
+.chapter-status-ready {
+    cursor: pointer;
+    transition: border-color .2s, background .2s, box-shadow .2s
+}
+
+.chapter-status-ready:hover,
+.chapter-status-ready:focus-visible {
+    border-color: #69b1ff;
+    background: #f0f7ff;
+    box-shadow: 0 0 0 2px rgba(22, 119, 255, .08);
+    outline: none
 }
 
 .chapter-ok {
@@ -841,6 +862,35 @@ html, body, #root {
 
 .phase2-publication-status {
     margin: 12px 20px;
+}
+
+.phase2-generation-banner {
+    margin: 12px 20px 0
+}
+
+.phase2-generation-tail {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 54px;
+    margin: 14px 0 2px;
+    color: #59718a;
+    font-size: 13px
+}
+
+.tree-pane > .phase2-generation-tail {
+    border-top: 1px dashed #d9e2ec
+}
+
+.phase2-generation-ended {
+    color: #8c8c8c
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .phase2-generation-tail .ant-spin-dot {
+        animation: none
+    }
 }
 
 .phase2-publication-status .ant-progress {

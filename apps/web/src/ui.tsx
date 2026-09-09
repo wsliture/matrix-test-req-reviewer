@@ -51,7 +51,7 @@ import {
     PlusOutlined,
     StopOutlined
 } from "@ant-design/icons";
-import {Navigate, Route, Routes, useLocation, useNavigate, useParams} from "react-router-dom";
+import {Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams} from "react-router-dom";
 import {RequirementDiffPage} from "./RequirementDiff";
 import {SortableTableList} from "./SortableTableList";
 import {readPhase2Draft, removePhase2Draft, writePhase2Draft} from "./phase2Draft";
@@ -247,19 +247,19 @@ function ProjectActivity({activity}: {activity?: CurrentActivity | null}) {
 }
 
 const CHAPTERS = [
-    ["第一章：范围", "finalize_chapter1_scope", "chapter1-scope.json"],
-    ["第二章：系统概述", "finalize_chapter2_system_overview", "chapter2-system-overview.json"],
-    ["第三章：硬件接口", "finalize_hardware_interface", "hardware-interface-model.json"],
-    ["4.1：功能测试", "finalize_functional_test_content", "functional-test-content.json"],
-    ["4.2：性能测试", "finalize_performance_test_content", "performance-test-content.json"],
-    ["4.3：接口测试", "finalize_interface_test_content", "interface-test-content.json"],
-    ["4.4：可靠性安全性测试", "finalize_reliability_safety_test_content", "reliability-safety-test-content.json"],
-    ["4.5：余量测试", "finalize_margin_test_content", "margin-test-content.json"],
-    ["4.6：边界测试", "finalize_boundary_test_content", "boundary-test-content.json"],
-    ["4.7：数据处理测试", "finalize_data_processing_test_content", "data-processing-test-content.json"],
-    ["4.8：恢复性测试", "finalize_recovery_test_content", "recovery-test-content.json"],
-    ["4.9：强度测试", "finalize_strength_test_content", "strength-test-content.json"],
-    ["测试需求追溯关系", "generate_phase2_traceability", "phase2-test-traceability.json"]
+    ["第一章：范围", "finalize_chapter1_scope", "chapter1-scope.json", "1"],
+    ["第二章：系统概述", "finalize_chapter2_system_overview", "chapter2-system-overview.json", "2"],
+    ["第三章：硬件接口", "finalize_hardware_interface", "hardware-interface-model.json", "3.1"],
+    ["4.1：功能测试", "finalize_functional_test_content", "functional-test-content.json", "4.1"],
+    ["4.2：性能测试", "finalize_performance_test_content", "performance-test-content.json", "4.2"],
+    ["4.3：接口测试", "finalize_interface_test_content", "interface-test-content.json", "4.3"],
+    ["4.4：可靠性安全性测试", "finalize_reliability_safety_test_content", "reliability-safety-test-content.json", "4.4"],
+    ["4.5：余量测试", "finalize_margin_test_content", "margin-test-content.json", "4.5"],
+    ["4.6：边界测试", "finalize_boundary_test_content", "boundary-test-content.json", "4.6"],
+    ["4.7：数据处理测试", "finalize_data_processing_test_content", "data-processing-test-content.json", "4.7"],
+    ["4.8：恢复性测试", "finalize_recovery_test_content", "recovery-test-content.json", "4.8"],
+    ["4.9：强度测试", "finalize_strength_test_content", "strength-test-content.json", "4.9"],
+    ["测试需求追溯关系", "generate_phase2_traceability", "phase2-test-traceability.json", "6"]
 ] as const;
 
 function eventText(item: RunEvent) {
@@ -378,16 +378,19 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
 }
 
 function ChapterStatus({project, run}: { project: Project; run?: Phase2Run }) {
+    const nav = useNavigate();
     const completed = new Set(run?.completedStages || []), missing = new Set(project.missingArtifacts || []),
         failed = run?.status === "FAILED";
     return <Card title="章节生成状态" className="chapter-status"><Row
-        gutter={[12, 12]}>{CHAPTERS.map(([name, stage, artifact]) => {
+        gutter={[12, 12]}>{CHAPTERS.map(([name, stage, artifact, chapter]) => {
         const ready = run ? completed.has(stage) : !missing.has(artifact);
         return <Col xs={24} md={12} xl={8} key={stage}>
-            <div className="chapter-status-row"><span>{name}</span>{ready ?
+            <button type="button" className={`chapter-status-row${ready ? " chapter-status-ready" : ""}`}
+                    disabled={!ready} onClick={() => ready && nav(`/projects/${project.id}/review?chapter=${encodeURIComponent(chapter)}`)}>
+                <span>{name}</span>{ready ?
                 <CheckCircleFilled className="chapter-ok" title="已成功生成"/> :
                 <CloseCircleFilled className={failed ? "chapter-failed" : "chapter-pending"}
-                                   title={failed ? "未生成" : "尚未生成"}/>}</div>
+                                   title={failed ? "未生成" : "尚未生成"}/>}</button>
         </Col>
     })}</Row></Card>
 }
@@ -572,7 +575,7 @@ function treeOf<T extends {
 
 function Review() {
     const [reviewMessage, reviewMessageContext] = message.useMessage();
-    const {id = ""} = useParams(), navigate = useNavigate(),
+    const {id = ""} = useParams(), navigate = useNavigate(), [searchParams] = useSearchParams(),
         qc = useQueryClient(), [documentId, setDocumentId] = useState<string>(), [evalOpen, setEvalOpen] = useState(false),
         [evaluationTargetId, setEvaluationTargetId] = useState<string>(), [scores, setScores] = useState<ReviewScores>({
             correctness: 4,
@@ -582,7 +585,8 @@ function Review() {
         {activeSourceNodeId, activeRequirementId, setSource, setRequirement} = useTraceStore(), data = useQuery({
             queryKey: ["review-data", id],
             queryFn: () => api<ReviewData>(`/projects/${id}/review-data`),
-            retry: false
+            retry: false,
+            refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.generation?.status || "") ? 3000 : false
         }),
         trace = useQuery({
             queryKey: ["trace-links", id, activeSourceNodeId],
@@ -617,11 +621,26 @@ function Review() {
     const [submissionLocked, setSubmissionLocked] = useState(false);
     const [editRunId, setEditRunId] = useState<string>();
     const [draftExpectedRevision, setDraftExpectedRevision] = useState<string>();
+    const [draftExpectedArtifactRevisions, setDraftExpectedArtifactRevisions] = useState<Record<string, string>>();
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
+    const locatedChapter = useRef<string | undefined>(undefined);
     const currentUser = qc.getQueryData<CurrentUser>(["me"]);
+    useEffect(() => {
+        const runId = data.data?.generation?.runId, status = data.data?.generation?.status;
+        if (!runId || !(["QUEUED", "RUNNING"] as string[]).includes(status || "")) return;
+        const source = new EventSource(`/api/phase2-runs/${runId}/events`, {withCredentials: true});
+        const refresh = () => {
+            void qc.invalidateQueries({queryKey: ["review-data", id]});
+            void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]})
+        };
+        source.addEventListener("run-events", refresh);
+        source.addEventListener("run-state", refresh);
+        return () => source.close()
+    }, [data.data?.generation?.runId, data.data?.generation?.status, id, qc]);
     const inlineEditor = useQuery({queryKey: ["phase2-editor-inline", id],
         queryFn: () => api<Phase2InlineDescriptor>(`/projects/${id}/phase2-editor-inline`),
-        staleTime: Infinity, gcTime: 30 * 60_000});
+        staleTime: Infinity, gcTime: 30 * 60_000,
+        refetchInterval: () => (["QUEUED", "RUNNING"] as string[]).includes(data.data?.generation?.status || "") ? 3000 : false});
     const [draftHydratedScope, setDraftHydratedScope] = useState("");
     const draftScope = currentUser ? `${id}:${currentUser.id}` : "";
     useEffect(() => {
@@ -634,6 +653,7 @@ function Review() {
             setReferenceOperations(restored.referenceOperations);
             setEditRunId(restored.editRunId);
             setDraftExpectedRevision(restored.expectedRevision);
+            setDraftExpectedArtifactRevisions(restored.expectedArtifactRevisions);
             setDocumentEditing(true)
         }
         setDraftHydratedScope(draftScope)
@@ -643,13 +663,15 @@ function Review() {
         const hasChanges = Object.keys(editorDrafts).length > 0 || tableOperations.length > 0 || requirementOperations.length > 0 || referenceOperations.length > 0;
         if (!hasChanges && !editRunId) return;
         writePhase2Draft({version: 1, projectId: id, userId: currentUser.id, editorDrafts, tableOperations, requirementOperations, referenceOperations,
-            expectedRevision: draftExpectedRevision || inlineEditor.data?.revision, editRunId})
-    }, [documentEditing, draftHydratedScope, draftScope, currentUser?.id, id, editorDrafts, tableOperations, requirementOperations, referenceOperations, editRunId, draftExpectedRevision, inlineEditor.data?.revision]);
+            expectedRevision: draftExpectedRevision || inlineEditor.data?.revision,
+            expectedArtifactRevisions: draftExpectedArtifactRevisions || inlineEditor.data?.artifact_revisions, editRunId})
+    }, [documentEditing, draftHydratedScope, draftScope, currentUser?.id, id, editorDrafts, tableOperations, requirementOperations, referenceOperations, editRunId, draftExpectedRevision, draftExpectedArtifactRevisions, inlineEditor.data?.revision, inlineEditor.data?.artifact_revisions]);
     const clearEditingDraft = useCallback(() => {
         if (currentUser) removePhase2Draft(id, currentUser.id);
         setDocumentEditing(false); setEditorDrafts({}); setTableOperations([]); setRequirementOperations([]); setReferenceOperations([]);
         setVersionNameModalOpen(false); setVersionName(""); setSubmissionLocked(false);
-        setSourceEditBinding(undefined); setTableEditBinding(undefined); setEditRunId(undefined); setDraftExpectedRevision(undefined)
+        setSourceEditBinding(undefined); setTableEditBinding(undefined); setEditRunId(undefined); setDraftExpectedRevision(undefined);
+        setDraftExpectedArtifactRevisions(undefined)
     }, [currentUser?.id, id]);
     const outboxKey = currentUser ? editTimeOutboxKey(id, currentUser.id) : "";
     const [pendingEditDurationMs, setPendingEditDurationMs] = useState(0);
@@ -750,6 +772,7 @@ function Review() {
     }, [editRun.data?.status, id, qc, stopEditActivity, clearEditingDraft]);
     const saveInlineEdit = useMutation({mutationFn: (requestedVersionName: string) => api<Phase2EditRun>(`/projects/${id}/phase2-edits/batch`, {
         method: "POST", body: JSON.stringify({expected_revision: draftExpectedRevision || inlineEditor.data?.revision,
+            expected_artifact_revisions: draftExpectedArtifactRevisions || inlineEditor.data?.artifact_revisions,
             version_name: requestedVersionName.trim(),
             changes: Object.entries(editorDrafts).map(([edit_key, value]) => ({edit_key, value})),
             table_operations: tableOperations.map(({draft_key: _draftKey, ...operation}) => operation),
@@ -785,6 +808,10 @@ function Review() {
     }, [data.data, documentId]);
     const selectedDocument = data.data?.documents.find(item => item.id === documentId),
         requirements = data.data?.requirements || [],
+        generation = data.data?.generation,
+        generationActive = (["QUEUED", "RUNNING"] as string[]).includes(generation?.status || ""),
+        generationFinalizing = generationActive && ["generate_phase2_traceability", "finalize_phase2_document"]
+            .includes(String(generation?.currentStage || "").split(":", 1)[0]),
         selectedRequirement = requirements.find(item => item.id === activeRequirementId) || requirements[0],
         sourceCounts = useMemo(() => new Map((data.data?.links || []).map(link => link.sourceNodeId).map((sourceId, _, all) => [sourceId, all.filter(item => item === sourceId).length])), [data.data?.links]),
         requirementTree = useMemo(() => treeOf(requirements.filter(node => node.nodeType !== "requirement"), node =>
@@ -902,6 +929,14 @@ function Review() {
             setEvalOpen(true);
             return true
         };
+    useEffect(() => {
+        const chapter = searchParams.get("chapter")?.trim();
+        if (!chapter || locatedChapter.current === chapter) return;
+        const target = requirements.find(node => node.nodeType === "section" && node.number === chapter);
+        if (!target) return;
+        locatedChapter.current = chapter;
+        gotoRequirement(target.id)
+    }, [searchParams, requirements]);
     const uniqueTraceLinks = [...new Map((trace.data || []).map(link => [link.targetNodeId, link])).values()],
         sectionLinks = uniqueTraceLinks.filter(link => link.targetNode.nodeType !== "requirement"),
         requirementLinks = uniqueTraceLinks.filter(link => link.targetNode.nodeType === "requirement"),
@@ -957,6 +992,15 @@ function Review() {
     if (data.isLoading) return <Spin fullscreen/>;
     if (data.error) return <Shell backTo={`/projects/${id}`}><Alert type="error" message="评审数据加载失败"
                                                                     description={data.error.message}/></Shell>;
+    const generationTail = generationActive ? <div className="phase2-generation-tail" role="status" aria-live="polite">
+            <Spin size="small"/><span>后续章节仍在生成 · {generation?.currentStage ? stageName(generation.currentStage) : "任务启动中"}</span>
+        </div> : generation?.status === "FAILED" || generation?.status === "CANCELLED" ?
+            <div className="phase2-generation-tail phase2-generation-ended" role="status">
+                {generation.status === "FAILED" ? "生成已失败，以上为当前已完成内容" : "生成已终止，以上为当前已完成内容"}
+            </div> : null;
+    const requestedChapter = searchParams.get("chapter")?.trim(),
+        validRequestedChapter = requestedChapter && CHAPTERS.some(item => item[3] === requestedChapter),
+        requestedChapterAvailable = requestedChapter && requirements.some(node => node.nodeType === "section" && node.number === requestedChapter);
     const sourceDirectory = <aside className="tree-pane review-tree-pane"><Typography.Title
         level={5}>源文档</Typography.Title>
         <Select style={{width: "100%"}} value={documentId} onChange={value => {
@@ -988,13 +1032,13 @@ function Review() {
         level={5}>测试需求目录</Typography.Title><Tree blockNode showLine treeData={requirementTree}
                                                        selectedKeys={selectedRequirement ? [selectedRequirement.id] : []}
                                                        defaultExpandAll
-                                                       onSelect={keys => gotoRequirement(String(keys[0] || ""))}/>
+                                                       onSelect={keys => gotoRequirement(String(keys[0] || ""))}/>{generationTail}
     </aside>;
     const requirementDocument = <main className="document requirement-pane review-document-pane"
         onChangeCapture={documentEditing ? recordEditActivity : undefined}
         onBlurCapture={documentEditing ? stopEditActivity : undefined}><Phase2DocumentRenderer
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}
-        activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation}
+        activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation} evaluationDisabled={generationActive}
         reviewScores={reviewScores} editing={documentEditing} drafts={editorDrafts}
         onDraft={(binding, value) => { if (interactionLocked) return; recordEditActivity(); setEditorDrafts(current => ({...current, [binding.edit_key]: value})) }}
         onEditSources={binding => {
@@ -1058,7 +1102,7 @@ function Review() {
                 return [...current.filter(item => !(item.operation === "update_reference" && sameKey(item))), operation]
             }
             return [...current, operation]
-        }) }} onEditActivityEnd={stopEditActivity} readOnly={interactionLocked} interactionLocked={interactionLocked}/></main>;
+        }) }} onEditActivityEnd={stopEditActivity} readOnly={interactionLocked} interactionLocked={interactionLocked}/>{generationTail}</main>;
     const persist = (name: string, setter: (sizes: SplitSizes) => void, threshold: number, bothSides: boolean) => (sizes: number[]) => {
         const next = snappedSizes(sizes, threshold, bothSides);
         setter(next);
@@ -1168,45 +1212,54 @@ function Review() {
     const changeCount = Object.keys(editorDrafts).length + tableOperations.length + requirementOperations.length + referenceOperations.length;
     const requirementToolbar = <div className="requirement-toolbar">
         <div className="requirement-toolbar-context"><strong>第三方测试需求</strong>
+            <Popover content={editTimeDetails} trigger={["hover", "click"]} placement="bottomRight">
+                <button type="button" className="edit-time-summary" aria-label="查看编辑用时详情">
+                    <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
+                </button>
+            </Popover>
             {documentEditing ? <span className="requirement-edit-status">已修改 {changeCount} 项</span> :
-                <><Popover content={editTimeDetails} trigger={["hover", "click"]} placement="bottomRight">
-                        <button type="button" className="edit-time-summary" aria-label="查看编辑用时详情">
-                            <ClockCircleOutlined/><span>编辑用时</span><strong>{compactEditDuration(displayedMyEditDuration)}</strong>
-                        </button>
-                    </Popover><button type="button" className={`review-progress-summary ${pendingCount ? "is-pending" : "is-complete"}`}
+                <button type="button" className={`review-progress-summary ${pendingCount ? "is-pending" : "is-complete"}`}
                         disabled={interactionLocked} onClick={() => {
                             setPendingAttention(false);
                             setReviewCenterOpen(true)
                         }}>{pendingCount ? <Badge status="warning"/> : <CheckCircleFilled/>}
                         <span>{pendingCount ? `评审进度 ${reviewedCount}/${reviewItems.length}` : "评审已完成"}</span>
-                    </button></>}
+                    </button>}
         </div>
         <Space wrap className="requirement-toolbar-actions">{!documentEditing ? <>
             <Button type="primary" className="phase2-edit-button" icon={<EditOutlined/>}
                     disabled={interactionLocked || inlineEditor.isLoading} loading={inlineEditor.isLoading}
-                    onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision); setDocumentEditing(true) }}>编辑文档</Button>
+                    onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision);
+                        setDraftExpectedArtifactRevisions(inlineEditor.data?.artifact_revisions); setDocumentEditing(true) }}>编辑文档</Button>
             <Tooltip title="下载第三方测试需求 DOCX"><Button icon={<DownloadOutlined/>}
-                    disabled={interactionLocked} loading={downloadRequirements.isPending}
+                    disabled={interactionLocked || generationActive} loading={downloadRequirements.isPending}
                     onClick={() => downloadRequirements.mutate()}>下载需求文档</Button></Tooltip>
             <Dropdown trigger={["click"]} placement="bottomRight" menu={{items: [{
                 key: "reviews", icon: pendingCount ? undefined : <CheckCircleFilled className="review-menu-complete"/>,
                 label: <span className="review-menu-label"><span>评审中心</span>
                     {pendingCount ? <Tag color="orange">待评 {pendingCount}</Tag> : <span className="review-menu-complete">已完成</span>}</span>,
-                disabled: interactionLocked,
+                disabled: interactionLocked || generationActive,
                 onClick: () => { setPendingAttention(false); setReviewCenterOpen(true) }
             }, {
-                key: "diff", label: "变更分析", disabled: interactionLocked,
+                key: "diff", label: "变更分析", disabled: interactionLocked || generationActive,
                 onClick: () => navigate(`/projects/${id}/requirement-diff`)
             }]}}><Button icon={<EllipsisOutlined/>} disabled={interactionLocked}>更多</Button></Dropdown>
         </> : <>
             <Button disabled={interactionLocked} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
             <Button type="primary" className="phase2-save-button" icon={<SaveOutlined/>} loading={saveInlineEdit.isPending || rebuilding}
-                    disabled={interactionLocked || !changeCount || inlineEditor.isLoading || inlineEditor.isFetching}
+                    disabled={interactionLocked || generationFinalizing || !changeCount || inlineEditor.isLoading || inlineEditor.isFetching}
                     onClick={() => { stopEditActivity(); setVersionName(""); setVersionNameModalOpen(true) }}>保存并重建（{changeCount}）</Button>
         </>}</Space>
     </div>;
     const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
-    return <Shell backTo={`/projects/${id}`} backLabel={`返回 ${data.data?.project.name || "项目"}`} beforeLeave={confirmLeavingEditor}>{reviewMessageContext}<Layout className="review trace-review">
+    return <Shell backTo={`/projects/${id}`} backLabel="返回生成进度" beforeLeave={confirmLeavingEditor}>{reviewMessageContext}
+        {requestedChapter && !validRequestedChapter && <Alert className="phase2-generation-banner" type="warning" showIcon
+            message="无法识别指定的测试需求章节" description="已显示当前可用的第一个章节。"/>}
+        {requestedChapter && validRequestedChapter && !requestedChapterAvailable && <Alert className="phase2-generation-banner" type="info" showIcon
+            message={`第 ${requestedChapter} 章仍在生成`} description="章节发布后页面会自动定位到相应内容。"/>}
+        {generationActive && <Alert className="phase2-generation-banner" type="info" showIcon
+            message="测试需求仍在生成，当前内容会持续更新"
+            description={generationFinalizing ? "正在汇总最终文档，暂时无法保存修改。" : "已完成章节可以查看和编辑；评审、下载与变更分析将在生成完成后开放。"}/>}<Layout className="review trace-review">
         <div className="review-splitter-reset review-main-reset" onDoubleClick={event => {
             if ((event.target as HTMLElement).closest(".review-splitter-reset") === event.currentTarget && (event.target as HTMLElement).closest(".ant-splitter-bar")) {
                 setMainSizes(["50%", "50%"]);

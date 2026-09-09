@@ -214,11 +214,12 @@ export type Phase2Chapter = {
     blocks: Phase2Block[]
 };
 export type ReviewData = {
-    project: {id: string; name: string};
+    project: {id: string; name: string; status?: string};
     documents: ({ id: string; name: string; parseStatus: string; parseError?: string; nodes: DocumentNode[] })[];
     requirements: RequirementNode[];
     links: TraceLink[];
-    phase2Document: { chapters: Phase2Chapter[] }
+    phase2Document: { chapters: Phase2Chapter[] };
+    generation?: {runId: string; status: string; currentStage?: string; completedStages?: string[]; progress: number} | null
 };
 export type ReviewScores = { correctness: number; coverage: number; testability: number };
 export type ReviewRecord = {
@@ -262,7 +263,7 @@ export type Phase2EditorDescriptor = {artifact: string; business_id?: string; re
 export type Phase2EditRun = {id: string; status: string; progress: number; currentStage?: string; errorMessage?: string;
     savedAt?: string; savedRevision?: string; publishedAt?: string; publicationStatus?: "QUEUED" | "BUILDING" | "PUBLISHED" | "FAILED";
     stageTimings?: Record<string, {startedAt: string; finishedAt: string; durationMs: number}>; startedAt?: string; finishedAt?: string};
-export type Phase2InlineDescriptor = {revision: string; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};
+export type Phase2InlineDescriptor = {revision: string; artifact_revisions?: Record<string, string>; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};
 export type RequirementRevision = {id: string; sequence: number; versionLabel: string;
     versionName?: string;
     kind: "GENERATED_BASELINE" | "MIGRATED_BASELINE" | "PUBLISHED"; parentRevisionId?: string; baselineRevisionId?: string;

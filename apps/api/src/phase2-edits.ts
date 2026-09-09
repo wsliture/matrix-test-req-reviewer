@@ -8,6 +8,27 @@ const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxR
 const queue = new Queue("phase2-edit", {connection: redis});
 const runnerUrl = process.env.MATRIX_PHASE2_RUNNER_URL || "http://localhost:4097";
 const runnerAuth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
+const finalizeStageByArtifact: Record<string, string> = {
+    "chapter1-scope.json": "finalize_chapter1_scope", "chapter2-system-overview.json": "finalize_chapter2_system_overview",
+    "hardware-interface-model.json": "finalize_hardware_interface", "functional-test-content.json": "finalize_functional_test_content",
+    "performance-test-content.json": "finalize_performance_test_content", "interface-test-content.json": "finalize_interface_test_content",
+    "reliability-safety-test-content.json": "finalize_reliability_safety_test_content", "margin-test-content.json": "finalize_margin_test_content",
+    "boundary-test-content.json": "finalize_boundary_test_content", "data-processing-test-content.json": "finalize_data_processing_test_content",
+    "recovery-test-content.json": "finalize_recovery_test_content", "strength-test-content.json": "finalize_strength_test_content"
+};
+
+function editedArtifacts(body: any) {
+    const keys = [...(body.changes || []).map((item: any) => item.edit_key),
+        ...(body.table_operations || []).map((item: any) => item.container_key),
+        ...(body.requirement_operations || []).map((item: any) => item.container_key),
+        ...(body.reference_operations || []).map((item: any) => item.container_key)];
+    const result = new Set<string>();
+    for (const encoded of keys) try {
+        const value = JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"));
+        if (typeof value?.artifact === "string") result.add(value.artifact)
+    } catch { /* runner performs authoritative edit-key validation */ }
+    return [...result]
+}
 
 async function runner<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${runnerUrl}${path}`, {method: "POST", headers: {
@@ -109,13 +130,26 @@ export class Phase2EditsService {
             this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
             this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}})
         ]);
-        if (generation || edit) throw new ConflictException("该项目已有生成或编辑重建任务");
+        if (edit) throw new ConflictException("该项目已有编辑重建任务");
+        let generationMode = false;
+        if (generation) {
+            const current = String(generation.currentStage || "").split(":", 1)[0];
+            if (["generate_phase2_traceability", "finalize_phase2_document"].includes(current)) {
+                throw new ConflictException("正在汇总最终文档，请稍后保存")
+            }
+            const completed = new Set(Array.isArray(generation.completedStages) ? generation.completedStages.map(String) : []);
+            const artifacts = editedArtifacts(body);
+            const unavailable = artifacts.filter(artifact => !completed.has(finalizeStageByArtifact[artifact] || ""));
+            if (!artifacts.length || unavailable.length) throw new ConflictException("只能编辑已经完成生成的章节");
+            generationMode = true
+        }
         const request = {directory: project.workspacePath, expected_revision: body.expected_revision, version_name: versionName, changes, table_operations: tableOperations,
-            requirement_operations: requirementOperations, reference_operations: referenceOperations};
+            requirement_operations: requirementOperations, reference_operations: referenceOperations,
+            expected_artifact_revisions: body.expected_artifact_revisions, generation_mode: generationMode};
         const run = await this.db.$transaction(async tx => {
             const created = await tx.phase2EditRun.create({data: {projectId, userId: user.id, targetBusinessId: "phase2-document",
                 operation: "batch", expectedRevision: body.expected_revision, request: request as any}});
-            await tx.project.update({where: {id: projectId}, data: {status: "REBUILDING"}});
+            if (!generationMode) await tx.project.update({where: {id: projectId}, data: {status: "REBUILDING"}});
             await tx.auditLog.create({data: {userId: user.id, action: "PHASE2_EDIT_BATCH", resourceType: "Project", resourceId: projectId,
                 detail: {runId: created.id, changeCount: changes.length, tableOperationCount: tableOperations.length,
                     requirementOperationCount: requirementOperations.length, referenceOperationCount: referenceOperations.length, versionName} as any}});
