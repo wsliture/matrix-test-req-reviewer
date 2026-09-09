@@ -159,6 +159,7 @@ html, body, #root {
 }
 
 .shell.project-debug-shell {
+    height: 100vh;
     height: 100dvh;
     min-height: 0;
     overflow: hidden
@@ -293,6 +294,7 @@ html, body, #root {
 @media (max-width: 900px) {
     .shell.project-debug-shell {
         height: auto;
+        min-height: 100vh;
         min-height: 100dvh;
         overflow: visible
     }
