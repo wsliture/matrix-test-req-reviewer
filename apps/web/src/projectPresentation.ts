@@ -39,6 +39,8 @@ const STAGE_NAMES: Record<string, string> = {
     finalize_functional_init_content: "生成初始化功能需求",
     prepare_functional_other_content: "准备非初始化功能需求",
     get_functional_other_content_worker_batch: "准备非初始化功能需求",
+    get_hardware_interface_worker_batch: "准备硬件接口",
+    get_interface_test_worker_batch: "准备接口测试需求",
     finalize_functional_other_content: "生成非初始化功能需求",
     finalize_functional_test_content: "生成4.1：功能测试",
     prepare_performance_test_content: "准备性能测试",
@@ -65,6 +67,12 @@ export function stageName(value: string, batchIndex?: unknown) {
     const [mode, encodedIndex] = value.split(":", 2), index = Number(batchIndex ?? encodedIndex);
     if (mode === "get_functional_other_content_worker_batch") {
         return Number.isInteger(index) && index > 0 ? `准备第${index}个非初始化功能需求` : "准备非初始化功能需求"
+    }
+    if (mode === "get_hardware_interface_worker_batch") {
+        return Number.isInteger(index) && index > 0 ? `准备第${index}个硬件接口` : "准备硬件接口"
+    }
+    if (mode === "get_interface_test_worker_batch") {
+        return Number.isInteger(index) && index > 0 ? `准备第${index}个接口测试需求` : "准备接口测试需求"
     }
     return STAGE_NAMES[mode] || mode
 }

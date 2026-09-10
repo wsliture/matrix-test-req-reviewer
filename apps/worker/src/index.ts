@@ -7,7 +7,7 @@ import {Pool} from "pg";
 import {createOpencodeClient, type Event, type ToolPart} from "@opencode-ai/sdk/v2";
 import {access, readFile, stat} from "node:fs/promises";
 import path from "node:path";
-import {missingCompletionStages, parseToolOutput, progressOf} from "./progress.js";
+import {missingCompletionStages, parseToolOutput, progressOf, workerBatchIndex} from "./progress.js";
 import {indexAvailableRequirements, indexProject} from "./indexing.js";
 import {startPhase2EditWorker} from "./phase2-edit.js";
 import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
@@ -234,9 +234,7 @@ async function sessionStopSummary(sessionId: string, directory: string) {
 
 async function handleTool(runId: string, part: ToolPart, completed: Set<string>, workspace: string) {
     const mode = String(part.state.input.mode || "");
-    const batchIndex = mode === "get_functional_other_content_worker_batch"
-        ? Number(part.state.input.functional_other_content_worker_batch_index)
-        : undefined;
+    const batchIndex = workerBatchIndex(mode, part.state.input);
     const stage = Number.isInteger(batchIndex) && batchIndex! > 0 ? `${mode}:${batchIndex}` : mode;
     if (part.state.status === "running") {
         await update(runId, {stage});
@@ -245,7 +243,7 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
     }
     if (part.state.status === "error") throw new Error(`${mode}: ${part.state.error}`);
     if (part.state.status !== "completed") return;
-    const output = parseToolOutput(part.state.output);
+    const output = parseToolOutput(part.state.output, part.state.metadata);
     if (output.ok !== true) throw new Error(`${mode}: ${output.error || "业务执行失败"}`);
     const actual = output.mode || mode;
     await verifyStageArtifact(workspace, actual);

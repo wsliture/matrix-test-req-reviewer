@@ -33,6 +33,8 @@ describe("project presentation", () => {
         expect(activityPresentation({type: "PUBLISH", status: "SUCCEEDED", stage: "complete", progress: 100}).text)
             .toBe("更新发布：已完成");
         expect(stageName("get_functional_other_content_worker_batch:3")).toBe("准备第3个非初始化功能需求");
+        expect(stageName("get_hardware_interface_worker_batch:2")).toBe("准备第2个硬件接口");
+        expect(stageName("get_interface_test_worker_batch:4")).toBe("准备第4个接口测试需求");
         expect(stageName("resume_queued")).toBe("等待继续执行");
         expect(stageName("retry_queued")).toBe("等待自动重试");
         expect(stageName("resume_check_artifacts")).toBe("正在检查并复用已有工件")
