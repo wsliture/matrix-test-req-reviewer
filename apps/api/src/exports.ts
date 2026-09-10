@@ -227,7 +227,11 @@ export class ExportsController {
         let reportDirectory = publishedReportDirectory, previousPublication = false;
         if (project.status === "REBUILDING") {
             const edit = await this.db.phase2EditRun.findFirst({where: {projectId: id, status: {in: ["QUEUED", "RUNNING"]}, backupPath: {not: null}}, orderBy: {createdAt: "desc"}});
-            if (!edit?.backupPath) throw new ConflictException("项目正在首次生成，暂时没有可下载的已发布版本");
+            if (!edit?.backupPath) return reply.status(409).send({
+                statusCode: 409,
+                message: "项目正在首次生成，暂时没有可下载的已发布版本",
+                error: "Conflict"
+            });
             reportDirectory = path.resolve(edit.backupPath, ".matrix", "reports");
             previousPublication = true
         }
@@ -244,7 +248,11 @@ export class ExportsController {
                 // Continue to the compatible filename.
             }
         }
-        throw new NotFoundException("第三方测试需求DOCX不存在或为空")
+        return reply.status(404).send({
+            statusCode: 404,
+            message: "第三方测试需求DOCX不存在或为空",
+            error: "Not Found"
+        })
     }
 
     @Get(":id/review-report") async reviewReport(@Param("id") id: string, @Res() reply: any) {

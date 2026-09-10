@@ -629,6 +629,7 @@ function Review() {
     const [tracePopoverNodeId, setTracePopoverNodeId] = useState<string>();
     const [sourceNavigationKey, setSourceNavigationKey] = useState(0);
     const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
+    const [requirementsDownloadUnavailable, setRequirementsDownloadUnavailable] = useState(false);
     const [reviewFilter, setReviewFilter] = useState<"all" | "reviewed" | "pending">("all");
     const [reviewSearch, setReviewSearch] = useState("");
     const [pendingAttention, setPendingAttention] = useState(false);
@@ -883,10 +884,22 @@ function Review() {
     const downloadRequirements = useMutation({
         mutationFn: () => downloadApi(`/projects/${id}/test-requirements-docx`),
         onSuccess: result => {
+            setRequirementsDownloadUnavailable(false);
             saveDownload(result.blob, result.filename);
             message.success("第三方测试需求下载完成")
         },
-        onError: error => message.error(error.message)
+        onError: error => {
+            if (error instanceof ApiError && error.status === 404) {
+                setRequirementsDownloadUnavailable(true);
+                Modal.info({
+                    title: "需求文档尚未生成",
+                    content: "当前项目还没有可下载的第三方测试需求文档。请继续生成并等待报告生成完成后再下载。",
+                    okText: "知道了"
+                });
+                return
+            }
+            message.error(error.message)
+        }
     });
     const exportReport = useMutation({
         mutationFn: async () => {
@@ -1259,8 +1272,8 @@ function Review() {
                     disabled={interactionLocked || inlineEditor.isLoading} loading={inlineEditor.isLoading}
                     onClick={() => { setEditorDrafts({}); setDraftExpectedRevision(inlineEditor.data?.revision);
                         setDraftExpectedArtifactRevisions(inlineEditor.data?.artifact_revisions); setDocumentEditing(true) }}>编辑文档</Button>
-            <Tooltip title="下载第三方测试需求 DOCX"><Button icon={<DownloadOutlined/>}
-                    disabled={interactionLocked || generationActive} loading={downloadRequirements.isPending}
+            <Tooltip title={requirementsDownloadUnavailable ? "需求文档尚未生成，请完成生成流程后再下载" : "下载第三方测试需求 DOCX"}><Button icon={<DownloadOutlined/>}
+                    disabled={interactionLocked || generationActive || requirementsDownloadUnavailable} loading={downloadRequirements.isPending}
                     onClick={() => downloadRequirements.mutate()}>下载需求文档</Button></Tooltip>
             <Dropdown trigger={["click"]} placement="bottomRight" menu={{items: [{
                 key: "reviews", icon: pendingCount ? undefined : <CheckCircleFilled className="review-menu-complete"/>,
