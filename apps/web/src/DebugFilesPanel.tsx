@@ -36,6 +36,13 @@ function extensionsFor(filePath: string) {
     return []
 }
 
+const DEBUG_EDITOR_BASIC_SETUP = {
+    lineNumbers: true,
+    highlightActiveLine: true,
+    foldGutter: true,
+    searchKeymap: true
+} as const;
+
 export function DebugFilesPanel({projectId, running, onDirtyChange}: {
     projectId: string;
     running: boolean;
@@ -44,6 +51,7 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
     const qc = useQueryClient(), [selectedPath, setSelectedPath] = useState<string>(), [draft, setDraft] = useState(""),
         [externalConflict, setExternalConflict] = useState(false), savingRef = useRef(false), dirtyRef = useRef(false),
         selectedRef = useRef<string | undefined>(undefined);
+    const editorExtensions = useMemo(() => extensionsFor(selectedPath || ""), [selectedPath]);
     const tree = useQuery({queryKey: ["debug-tree", projectId], queryFn: () => api<{root: string; children: DebugTreeNode[]}>(`/projects/${projectId}/debug-files/tree`)});
     const file = useQuery({queryKey: ["debug-file", projectId, selectedPath], enabled: Boolean(selectedPath),
         queryFn: () => api<DebugFile>(`/projects/${projectId}/debug-files/file?path=${queryPath(selectedPath!)}`), retry: false});
@@ -147,8 +155,8 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
                 {externalConflict && <Alert type="error" showIcon message="文件已被外部修改"
                     description="当前草稿未被覆盖。请选择重新加载磁盘版本，或确认强制覆盖。"
                     action={<Space><Button onClick={() => reloadFile()}>放弃草稿并重新加载</Button><Button danger onClick={forceSave}>强制覆盖</Button></Space>}/>}
-                {info.kind === "text" ? <CodeMirror className="matrix-code-editor" value={draft} height="100%" extensions={extensionsFor(info.path)}
-                    onChange={setDraft} basicSetup={{lineNumbers: true, highlightActiveLine: true, foldGutter: true, searchKeymap: true}}/> :
+                {info.kind === "text" ? <CodeMirror className="matrix-code-editor" value={draft} height="100%" extensions={editorExtensions}
+                    onChange={setDraft} basicSetup={DEBUG_EDITOR_BASIC_SETUP}/> :
                     info.kind === "image" ? <div className="debug-image-preview"><img alt={info.path} src={`data:${info.mimeType};base64,${info.contentBase64}`}/></div> :
                         <Empty description="该二进制文件不支持在线查看或编辑"/>}
             </>}</div>
