@@ -1,4 +1,5 @@
 import "dotenv/config";
+import {opencodeFetch, describeError} from "./opencode-transport.js";
 import {runSessionTasks} from "./session-tasks.js";
 import {Queue, Worker} from "bullmq";
 import {Redis} from "ioredis";
@@ -17,6 +18,7 @@ const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", 
     phase2Queue = new Queue("phase2", {connection});
 const auth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
 const client = createOpencodeClient({
+    fetch: opencodeFetch,
     baseUrl: process.env.OPENCODE_URL || "http://localhost:4096",
     headers: {Authorization: `Basic ${auth}`}
 });
@@ -335,7 +337,8 @@ new Worker("phase2", async job => {
         }
         if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
         if (await cancelled(runId)) return {cancelled: true};
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = describeError(error);
+        console.error("Phase2 attempt failed", {runId, stage: failureStage, reason, error});
         const message = `失败阶段：${failureStage}；原因：${reason}`;
         const failed = await finishFailedAttempt(runId, message, completed);
         if (!failed) return {cancelled: true};

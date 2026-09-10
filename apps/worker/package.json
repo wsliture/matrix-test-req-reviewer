@@ -15,7 +15,8 @@
     "fast-xml-parser": "^5.11.0",
     "ioredis": "^5.7.0",
     "jszip": "^3.10.1",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "undici": "^6.28.1"
   },
   "devDependencies": {
     "@types/node": "^22.17.2",
