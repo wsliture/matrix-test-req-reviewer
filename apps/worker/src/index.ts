@@ -1,4 +1,5 @@
 import "dotenv/config";
+import {runSessionTasks} from "./session-tasks.js";
 import {Queue, Worker} from "bullmq";
 import {Redis} from "ioredis";
 import {Pool} from "pg";
@@ -94,7 +95,7 @@ async function claim(runId: string) {
     const result = await db.query(`update "Phase2Run" set status=$1,
         "startedAt"=coalesce("startedAt",statement_timestamp() AT TIME ZONE 'UTC'),
         "attemptStartedAt"=statement_timestamp() AT TIME ZONE 'UTC',
-        "attemptCount"="attemptCount"+1,"finishedAt"=NULL,"errorMessage"=NULL
+        "attemptCount"="attemptCount"+1,"finishedAt"=NULL
         ,"currentStage"=CASE WHEN "attemptCount">0 THEN 'resume_check_artifacts' ELSE "currentStage" END
         where id=$2 and status=$3 returning id,"attemptCount"`, ["RUNNING", runId, "QUEUED"]);
     return result.rowCount === 1 ? Number(result.rows[0].attemptCount) : undefined
@@ -142,8 +143,8 @@ async function verifyStageArtifact(workspace: string, stage: string) {
 }
 
 async function consume(runId: string, sessionId: string, directory: string, completed: Set<string>,
-                       tracker: SessionUsageTracker, signal: AbortSignal) {
-    const subscription = await client.event.subscribe({directory});
+                       tracker: SessionUsageTracker, signal: AbortSignal, onStage: (stage: string) => void) {
+    const subscription = await client.event.subscribe({directory}, {signal});
     let dirty = false, lastFlush = 0, flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushUsage = async (force = false) => {
         if (force && flushTimer) {
@@ -184,6 +185,7 @@ async function consume(runId: string, sessionId: string, directory: string, comp
         } else if (e.type === "message.part.updated") {
             const part = e.properties.part;
             if (part.type !== "tool" || part.sessionID !== sessionId || part.tool !== "filldata_phase2_workflow") continue;
+            onStage(String(part.state.input.mode || "filldata_phase2_workflow"));
             await handleTool(runId, part, completed, directory)
         } else if (e.type === "session.error" && e.properties.sessionID === sessionId) {
             await flushUsage(true);
@@ -270,6 +272,7 @@ new Worker("phase2", async job => {
         completed = new Set<string>(Array.isArray(p.completedStages) ? p.completedStages.map(String) : []),
         abort = new AbortController();
     let generatedBaselineId = "";
+    let activeSessionId = "", failureStage = "创建OpenCode会话";
     const attempt = await claim(runId);
     if (!attempt) return {cancelled: true};
     await event(runId, "run.started", {projectId: p.id, attempt});
@@ -279,6 +282,7 @@ new Worker("phase2", async job => {
         const created = await client.session.create({directory: p.workspacePath, title: `Phase 2 ${p.id}`});
         if (!created.data) throw new Error("创建OpenCode会话失败");
         const sessionId = created.data.id;
+        activeSessionId = sessionId;
         const usageBaseline = p.tokenUsage || emptyTokenUsage();
         const usageTracker = new SessionUsageTracker(sessionId, usageBaseline);
         await update(runId, {session: sessionId});
@@ -287,15 +291,16 @@ new Worker("phase2", async job => {
             return {cancelled: true}
         }
         await event(runId, "session.created", {sessionId});
-        const eventTask = consume(runId, sessionId, p.workspacePath, completed, usageTracker, abort.signal);
         await event(runId, "command.started", {command: "/matrix-phase2"});
-        await client.session.command({
-            sessionID: sessionId,
-            directory: p.workspacePath,
-            command: "matrix-phase2",
-            arguments: ""
-        });
-        await eventTask;
+        failureStage = "执行matrix-phase2命令";
+        await runSessionTasks(
+            () => consume(runId, sessionId, p.workspacePath, completed, usageTracker, abort.signal, stage => { failureStage = stage }),
+            () => client.session.command({
+                sessionID: sessionId,
+                directory: p.workspacePath,
+                command: "matrix-phase2",
+                arguments: ""
+            }, {signal: abort.signal, throwOnError: true}));
         try {
             await update(runId, {tokenUsage: addUsage(usageBaseline, await collectSessionUsage(sessionId, p.workspacePath))})
         } catch {
@@ -307,12 +312,15 @@ new Worker("phase2", async job => {
             const summary = await sessionStopSummary(sessionId, p.workspacePath);
             throw new Error(`Phase 2工作流提前结束，仅完成：${[...completed].join(", ") || "无"}。${summary}`)
         }
+        failureStage = "验证Phase 2最终报告";
         await verify(p.workspacePath);
         if (await cancelled(runId)) return {cancelled: true};
+        failureStage = "建立Phase 2评审索引";
         await indexProject(db, p.id, p.workspacePath);
+        failureStage = "保存Phase 2基线版本";
         const baseline: any = await createRequirementRevision(db, {projectId: p.id, workspace: p.workspacePath, kind: "GENERATED_BASELINE"});
         generatedBaselineId = baseline.revisionId || "";
-        const completedRun = await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed});
+        const completedRun = await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed, error: ""});
         if (!completedRun) {
             if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
             return {cancelled: true}
@@ -322,12 +330,16 @@ new Worker("phase2", async job => {
         return {ok: true}
     } catch (error) {
         abort.abort();
+        if (activeSessionId) {
+            await client.session.abort({sessionID: activeSessionId, directory: p.workspacePath}, {signal: AbortSignal.timeout(5000)}).catch(() => undefined);
+        }
         if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
         if (await cancelled(runId)) return {cancelled: true};
-        const message = error instanceof Error ? error.message : String(error);
+        const reason = error instanceof Error ? error.message : String(error);
+        const message = `失败阶段：${failureStage}；原因：${reason}`;
         const failed = await finishFailedAttempt(runId, message, completed);
         if (!failed) return {cancelled: true};
-        await event(runId, "run.attempt_failed", {message, attempt: failed.attemptCount});
+        await event(runId, "run.attempt_failed", {message, stage: failureStage, reason, attempt: failed.attemptCount});
         if (failed.autoRetry) {
             await event(runId, "run.retry_queued", {attempt: failed.attemptCount + 1});
             try {
@@ -346,8 +358,10 @@ new Worker("phase2", async job => {
             }
         }
         await db.query('update "Project" set status=$1,"updatedAt"=now() where id=$2', ["FAILED", p.id]);
-        await event(runId, "run.failed", {message, attempt: failed.attemptCount});
+        await event(runId, "run.failed", {message, stage: failureStage, reason, attempt: failed.attemptCount});
         throw error
+    } finally {
+        abort.abort();
     }
 }, {
     connection,

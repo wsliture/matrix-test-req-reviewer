@@ -266,8 +266,8 @@ function eventText(item: RunEvent) {
     const mode = String(item.payload.mode || ""), stage = stageName(mode, item.payload.batchIndex);
     if (item.type === "run.queued") return "任务已进入执行队列";
     if (item.type === "run.started") return `Worker已开始第${Number(item.payload.attempt || 1)}次执行`;
-    if (item.type === "run.resumed") return "已继续生成测试需求";
-    if (item.type === "run.attempt_failed") return `第${Number(item.payload.attempt || 1)}次执行失败：${String(item.payload.message || "未知错误")}`;
+    if (item.type === "run.resumed") return item.payload.reason ? `已继续生成测试需求：${String(item.payload.reason)}` : "已继续生成测试需求";
+    if (item.type === "run.attempt_failed") return `第${Number(item.payload.attempt || 1)}次执行失败：${item.payload.stage ? `${stageName(String(item.payload.stage))}；原因：${String(item.payload.reason || item.payload.message || "未知错误")}` : String(item.payload.message || "未知错误")}`;
     if (item.type === "run.retry_queued") return `已自动安排第${Number(item.payload.attempt || 1)}次执行`;
     if (item.type === "run.auto_retry_changed") return item.payload.enabled ? "已开启失败自动重试" : "已关闭失败自动重试";
     if (item.type === "model.selected") return `使用模型：${String(item.payload.name || item.payload.model || "OpenCode当前配置模型")}`;
@@ -485,8 +485,8 @@ function ProjectPage() {
                                               onConfirm={() => cancel.mutate(latest.id)}><Button danger
                                                                                                  icon={<StopOutlined/>}
                                                                                                  loading={cancel.isPending}>终止生成</Button></Popconfirm>}</Space>
-            {latest?.status === "FAILED" && latest.errorMessage && <Alert className="phase2-run-feedback" type="error" showIcon
-                message="测试需求生成失败" description={latest.errorMessage}/>}
+            {latest?.errorMessage && ["FAILED", "RUNNING", "QUEUED"].includes(latest.status) && <Alert className="phase2-run-feedback" type={latest.status === "FAILED" ? "error" : "warning"} showIcon
+                message={latest.status === "FAILED" ? "测试需求生成失败" : "上次执行失败，正在重试"} description={latest.errorMessage}/>}
             {latest?.status === "CANCELLED" && <Alert className="phase2-run-feedback" type="info" showIcon
                 message="测试需求生成已终止"/>}
             {(run.error || cancel.error) &&
