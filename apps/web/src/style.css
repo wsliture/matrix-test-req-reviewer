@@ -377,6 +377,11 @@ html, body, #root {
 }
 
 .run-log-card .ant-card-body {
+    padding: 0;
+    background: #0f172a
+}
+
+.run-log-scroll {
     padding: 0 16px;
     max-height: 320px;
     overflow: auto;

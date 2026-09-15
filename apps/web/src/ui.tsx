@@ -329,14 +329,22 @@ function RunMetrics({run}: {run?: Phase2Run}) {
     </div>
 }
 
-function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
+function RunLogs({run, onEvents, scrollPositions}: {
+    run?: Phase2Run;
+    onEvents: () => void;
+    scrollPositions: {current: Map<string, number>};
+}) {
     const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务"),
         [runState, setRunState] = useState<Phase2Run | undefined>(run),
-        [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
+        [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set()),
+        [initialEventsLoaded, setInitialEventsLoaded] = useState(false),
+        scrollRef = useRef<HTMLDivElement>(null), pendingRestoreRef = useRef(true);
     useEffect(() => setRunState(run), [run]);
     useEffect(() => {
         setEvents([]);
         setExpandedEvents(new Set());
+        setInitialEventsLoaded(false);
+        pendingRestoreRef.current = true;
         if (!run) return;
         let active = true;
         const merge = (rows: RunEvent[]) => setEvents(previous => {
@@ -346,7 +354,9 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
         });
         api<Phase2Run>(`/phase2-runs/${run.id}`).then(value => {
             if (active && value.id === run.id) merge([...(value.events || [])].reverse())
-        }).catch(() => undefined);
+        }).catch(() => undefined).finally(() => {
+            if (active) setInitialEventsLoaded(true)
+        });
         if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status)) {
             setConnection("任务已结束");
             return () => {
@@ -383,7 +393,27 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
             source?.close()
         }
     }, [run?.id, run?.status]);
+    useLayoutEffect(() => {
+        if (!pendingRestoreRef.current || !initialEventsLoaded || !run?.id || !scrollRef.current) return;
+        const savedScrollTop = scrollPositions.current.get(run.id);
+        if (savedScrollTop === undefined) {
+            pendingRestoreRef.current = false;
+            return
+        }
+        if (events.length === 0) return;
+        scrollRef.current.scrollTop = savedScrollTop;
+        pendingRestoreRef.current = false
+    }, [events.length, initialEventsLoaded, run?.id, scrollPositions]);
+    useLayoutEffect(() => {
+        const runId = run?.id;
+        return () => {
+            if (runId && scrollRef.current) scrollPositions.current.set(runId, scrollRef.current.scrollTop)
+        }
+    }, [run?.id, scrollPositions]);
     return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
+        <div ref={scrollRef} className="run-log-scroll" onScroll={event => {
+            if (run?.id) scrollPositions.current.set(run.id, event.currentTarget.scrollTop)
+        }}>
         {events.length ? <List size="small" dataSource={events} renderItem={item => {
             const details = runWarningDetails(item.payload), expandable = item.type === "stage.completed" && details.warnings.length > 0,
                 expanded = expandable && expandedEvents.has(item.id), toggle = () => setExpandedEvents(value => toggleExpandedEvent(value, item.id));
@@ -402,6 +432,7 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
                 </div>
             </List.Item>
         }}/> : <div className="run-log-empty">正在等待任务启动...</div>}
+        </div>
     </Card></>
 }
 
@@ -427,7 +458,8 @@ function ProjectPage() {
     const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(),
         user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(false),
         [debugDirty, setDebugDirty] = useState(false), projectContentRef = useRef<HTMLDivElement>(null),
-        pendingContentScrollRef = useRef<number | undefined>(undefined), query = useQuery({
+        pendingContentScrollRef = useRef<number | undefined>(undefined),
+        runLogScrollPositionsRef = useRef<Map<string, number>>(new Map()), query = useQuery({
         queryKey: ["project", id],
         queryFn: () => api<Project>(`/projects/${id}`),
         refetchInterval: query => {
@@ -535,6 +567,7 @@ function ProjectPage() {
             {(run.error || cancel.error) &&
                 <Alert className="phase2-run-feedback" type="error" showIcon
                     message={(run.error || cancel.error)?.message}/>}<RunLogs key={latest?.id || id} run={latest}
+                                                                                                       scrollPositions={runLogScrollPositionsRef}
                                                                                                        onEvents={() => qc.invalidateQueries({queryKey: ["project", id]})}/>
         </Card></Content>;
     return <Shell className={debugOpen && user?.role === "ADMIN" ? "project-debug-shell" : ""}
