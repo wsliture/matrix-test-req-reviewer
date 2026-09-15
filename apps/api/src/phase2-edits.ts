@@ -1,7 +1,6 @@
 import {BadRequestException, ConflictException, Controller, ForbiddenException, Get, Injectable, Param, Post, Req, Body} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
-import {Prisma} from "@prisma/client";
 import {PrismaService} from "./prisma.js";
 
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null});
@@ -70,10 +69,12 @@ export class Phase2EditsService {
         if (typeof body.expected_revision !== "string" || !body.expected_revision) throw new BadRequestException("expected_revision不能为空");
         const project = await this.db.project.findUniqueOrThrow({where: {id: projectId}});
         const node = await this.node(projectId, body.node_id || body.container_id);
-        const [generation, edit] = await Promise.all([
+        const [generation, edit, failedDraft] = await Promise.all([
             this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
-            this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}})
+            this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
+            this.db.phase2EditRun.findFirst({where: {projectId, draftStatus: "PUBLISH_FAILED"}})
         ]);
+        if (failedDraft) throw new ConflictException("存在发布失败的编辑稿，请先重新发布或放弃编辑稿");
         if (generation || edit) throw new ConflictException("该项目已有生成或编辑重建任务");
         const request = {directory: project.workspacePath, artifact: node.artifact,
             business_id: node.nodeType === "requirement" ? node.businessId : undefined,
@@ -126,10 +127,12 @@ export class Phase2EditsService {
             || item.operation !== "add_reference" && typeof item.reference_key !== "string"
             || item.operation !== "delete_reference" && (typeof item.initial_value?.document_id !== "string" || typeof item.initial_value?.document_title !== "string"))) throw new BadRequestException("reference_operations格式无效");
         const project = await this.db.project.findUniqueOrThrow({where: {id: projectId}});
-        const [generation, edit] = await Promise.all([
+        const [generation, edit, failedDraft] = await Promise.all([
             this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
-            this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}})
+            this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}}),
+            this.db.phase2EditRun.findFirst({where: {projectId, draftStatus: "PUBLISH_FAILED"}})
         ]);
+        if (failedDraft) throw new ConflictException("存在发布失败的编辑稿，请先重新发布或放弃编辑稿");
         if (edit) throw new ConflictException("该项目已有编辑重建任务");
         let generationMode = false;
         if (generation) {
@@ -161,7 +164,7 @@ export class Phase2EditsService {
 
     async get(id: string) {
         const run = await this.db.phase2EditRun.findUniqueOrThrow({where: {id}});
-        const publicationStatus = run.status === "FAILED" ? "FAILED" : run.publishedAt ? "PUBLISHED" : run.savedAt ? "BUILDING" : "QUEUED";
+        const publicationStatus = run.draftStatus === "PUBLISH_FAILED" || run.status === "FAILED" ? "FAILED" : run.publishedAt ? "PUBLISHED" : run.savedAt ? "BUILDING" : "QUEUED";
         return {...run, publicationStatus}
     }
 
@@ -172,11 +175,25 @@ export class Phase2EditsService {
         const active = await this.db.phase2EditRun.findFirst({where: {projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}}});
         if (active) throw new ConflictException("该项目已有编辑重建任务");
         await this.db.$transaction([
-            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "retry_apply", progress: 0,
-                errorMessage: null, finishedAt: null, savedAt: null, savedRevision: null, applyResult: Prisma.JsonNull, publishedAt: null}}),
+            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "resume_publish", progress: 0,
+                errorMessage: null, finishedAt: null, publishedAt: null, draftStatus: "SAVED"}}),
             this.db.project.update({where: {id: run.projectId}, data: {status: "REBUILDING"}})
         ]);
-        await queue.add("phase2-edit-retry", {editRunId: id, rebuildOnly: false}, {jobId: `${id}-retry-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
+        await queue.add("phase2-edit-retry", {editRunId: id, rebuildOnly: true}, {jobId: `${id}-retry-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
+        return {...await this.db.phase2EditRun.findUniqueOrThrow({where: {id}}), publicationStatus: "QUEUED" as const}
+    }
+
+    async discard(id: string, user: {id: string; role: string}) {
+        if (!( ["ADMIN", "REVIEWER"] as string[]).includes(user.role)) throw new ForbiddenException("当前角色没有编辑权限");
+        const run = await this.db.phase2EditRun.findUniqueOrThrow({where: {id}});
+        if (run.status !== "FAILED" || run.draftStatus !== "PUBLISH_FAILED" || !run.backupPath) throw new ConflictException("只有发布失败且保留了编辑稿的任务可以放弃");
+        const active = await this.db.phase2EditRun.findFirst({where: {projectId: run.projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+        if (active) throw new ConflictException("该项目已有编辑重建任务");
+        await this.db.$transaction([
+            this.db.phase2EditRun.update({where: {id}, data: {status: "QUEUED", currentStage: "discard_draft", progress: 0, errorMessage: null, finishedAt: null}}),
+            this.db.project.update({where: {id: run.projectId}, data: {status: "REBUILDING"}})
+        ]);
+        await queue.add("phase2-edit-discard", {editRunId: id, discardDraft: true}, {jobId: `${id}-discard-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100});
         return {...await this.db.phase2EditRun.findUniqueOrThrow({where: {id}}), publicationStatus: "QUEUED" as const}
     }
 }
@@ -196,4 +213,5 @@ export class Phase2EditsController {
     }
     @Get("phase2-edit-runs/:runId") get(@Param("runId") runId: string) { return this.edits.get(runId) }
     @Post("phase2-edit-runs/:runId/retry") retry(@Param("runId") runId: string, @Req() req: any) { return this.edits.retry(runId, req.user) }
+    @Post("phase2-edit-runs/:runId/discard") discard(@Param("runId") runId: string, @Req() req: any) { return this.edits.discard(runId, req.user) }
 }

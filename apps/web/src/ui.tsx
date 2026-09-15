@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
 import {
     Alert,
@@ -41,6 +41,7 @@ import {
     CloseCircleFilled,
     DeleteOutlined,
     DownloadOutlined,
+    DownOutlined,
     EllipsisOutlined,
     InfoCircleOutlined,
     EditOutlined,
@@ -49,6 +50,7 @@ import {
     FileZipOutlined,
     MenuUnfoldOutlined,
     PlusOutlined,
+    RightOutlined,
     StopOutlined
 } from "@ant-design/icons";
 import {Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams} from "react-router-dom";
@@ -90,6 +92,7 @@ import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
 import {activityPresentation, phase2RunButtonLabel, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
 import {AppHeader} from "./AppHeader";
+import {isExpansionKey, runWarningDetails, toggleExpandedEvent} from "./runLogDetails";
 
 const {Content, Sider} = Layout;
 
@@ -274,7 +277,12 @@ function eventText(item: RunEvent) {
     if (item.type === "session.created") return "OpenCode会话创建成功";
     if (item.type === "command.started") return "已提交测试需求生成命令";
     if (item.type === "stage.running") return `开始：${stage}`;
-    if (item.type === "stage.completed") return `完成：${stage}`;
+    if (item.type === "stage.completed") {
+        const {warnings, skippedCount: skipped} = runWarningDetails(item.payload);
+        const warningCount = warnings.length;
+        const detail = [warningCount ? `${warningCount}条容错警告` : "", skipped ? `跳过${skipped}项` : ""].filter(Boolean).join("，");
+        return `完成：${stage}${detail ? `（${detail}）` : ""}`
+    }
     if (item.type === "run.succeeded") return "测试需求生成完成";
     if (item.type === "run.cancelled") return "用户已终止测试需求生成";
     if (item.type === "run.failed") return `生成失败：${String(item.payload.message || "未知错误")}`;
@@ -323,10 +331,12 @@ function RunMetrics({run}: {run?: Phase2Run}) {
 
 function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
     const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务"),
-        [runState, setRunState] = useState<Phase2Run | undefined>(run);
+        [runState, setRunState] = useState<Phase2Run | undefined>(run),
+        [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
     useEffect(() => setRunState(run), [run]);
     useEffect(() => {
         setEvents([]);
+        setExpandedEvents(new Set());
         if (!run) return;
         let active = true;
         const merge = (rows: RunEvent[]) => setEvents(previous => {
@@ -374,10 +384,24 @@ function RunLogs({run, onEvents}: { run?: Phase2Run; onEvents: () => void }) {
         }
     }, [run?.id, run?.status]);
     return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
-        {events.length ? <List size="small" dataSource={events} renderItem={item => <List.Item
-            className={`run-log ${item.type === "run.failed" || item.type === "run.attempt_failed" ? "error" : item.type.endsWith("succeeded") || item.type === "stage.completed" ? "success" : "info"}`}>
-            <span className="run-log-time">{localMinute(item.createdAt)}</span><span>{eventText(item)}</span>
-        </List.Item>}/> : <div className="run-log-empty">正在等待任务启动...</div>}
+        {events.length ? <List size="small" dataSource={events} renderItem={item => {
+            const details = runWarningDetails(item.payload), expandable = item.type === "stage.completed" && details.warnings.length > 0,
+                expanded = expandable && expandedEvents.has(item.id), toggle = () => setExpandedEvents(value => toggleExpandedEvent(value, item.id));
+            return <List.Item className={`run-log ${item.type === "run.failed" || item.type === "run.attempt_failed" ? "error" : item.type.endsWith("succeeded") || item.type === "stage.completed" ? "success" : "info"}`}>
+                <div className="run-log-entry">
+                    <div className={`run-log-summary${expandable ? " run-log-expandable" : ""}`}
+                        {...(expandable ? {role: "button", tabIndex: 0, "aria-expanded": expanded, onClick: toggle,
+                            onKeyDown: (event: ReactKeyboardEvent) => { if (isExpansionKey(event.key)) { event.preventDefault(); toggle() } }} : {})}>
+                        <span className="run-log-time">{localMinute(item.createdAt)}</span><span className="run-log-message">{eventText(item)}</span>
+                        {expandable && <span className="run-log-toggle" aria-hidden>{expanded ? <DownOutlined/> : <RightOutlined/>}</span>}
+                    </div>
+                    {expanded && <div className="run-log-details">
+                        <div>跳过操作数：{details.skippedCount}</div>
+                        <ol>{details.warnings.map((warning, index) => <li key={`${item.id}-${index}`}>{warning}</li>)}</ol>
+                    </div>}
+                </div>
+            </List.Item>
+        }}/> : <div className="run-log-empty">正在等待任务启动...</div>}
     </Card></>
 }
 
@@ -775,7 +799,9 @@ function Review() {
         queryFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}`), enabled: Boolean(editRunId),
         refetchInterval: query => (["QUEUED", "RUNNING"] as string[]).includes(query.state.data?.status || "") ? 1000 : false});
     const rebuilding = Boolean(editRunId && (["QUEUED", "RUNNING"] as string[]).includes(editRun.data?.status || "QUEUED"));
-    const interactionLocked = submissionLocked || rebuilding;
+    const failedDraft = editRun.data?.draftStatus === "PUBLISH_FAILED";
+    const interactionLocked = submissionLocked || rebuilding || failedDraft;
+    const [publicationWarnings, setPublicationWarnings] = useState<{warnings: string[]; skippedCount: number} | undefined>();
     useEffect(() => {
         if (!editRun.data?.savedAt || acknowledgedSavedRun.current === editRun.data.id) return;
         acknowledgedSavedRun.current = editRun.data.id;
@@ -785,15 +811,23 @@ function Review() {
     useEffect(() => {
         if (editRun.data?.status === "SUCCEEDED") {
             stopEditActivity();
+            if (editRun.data.warnings?.length) setPublicationWarnings({warnings: editRun.data.warnings, skippedCount: editRun.data.skippedCount || 0});
             clearEditingDraft();
             void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
             void qc.invalidateQueries({queryKey: ["review-data", id]});
             void qc.invalidateQueries({queryKey: ["reviews", id]});
-            message.success("修改已发布")
+            message.success(editRun.data.warnings?.length ? "修改已发布，但存在容错警告" : "修改已发布")
+        } else if (editRun.data?.status === "CANCELLED" && editRun.data?.currentStage === "discarded") {
+            stopEditActivity(); clearEditingDraft(); setSubmissionLocked(false); setDocumentEditing(false);
+            void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
+            void qc.invalidateQueries({queryKey: ["review-data", id]});
+            void qc.invalidateQueries({queryKey: ["reviews", id]});
+            void qc.invalidateQueries({queryKey: ["project", id]});
+            message.success("已放弃编辑稿并恢复上一发布版本")
         } else if (editRun.data?.status === "FAILED") {
             stopEditActivity();
             setSubmissionLocked(false);
-            setDocumentEditing(true);
+            setDocumentEditing(false);
             setSourceEditBinding(undefined); setTableEditBinding(undefined);
             void qc.invalidateQueries({queryKey: ["phase2-editor-inline", id]});
             void qc.invalidateQueries({queryKey: ["project", id]})
@@ -811,6 +845,9 @@ function Review() {
     const retryPublication = useMutation({mutationFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}/retry`, {method: "POST"}),
         onMutate: () => setSubmissionLocked(true),
         onSuccess: run => { setEditRunId(run.id); void editRun.refetch() }, onError: error => { setSubmissionLocked(false); message.error(error.message) }});
+    const discardDraft = useMutation({mutationFn: () => api<Phase2EditRun>(`/phase2-edit-runs/${editRunId}/discard`, {method: "POST"}),
+        onMutate: () => setSubmissionLocked(true), onSuccess: run => { setEditRunId(run.id); void editRun.refetch() },
+        onError: error => { setSubmissionLocked(false); message.error(error.message) }});
     const [mainSizes, setMainSizes] = useState<SplitSizes | undefined>(() => loadSplitSizes("main"));
     const [sourceDirectoryOpen, setSourceDirectoryOpen] = useState(false);
     const [requirementDirectoryOpen, setRequirementDirectoryOpen] = useState(false);
@@ -1452,12 +1489,14 @@ function Review() {
                 <span>当前阶段：{editRun.data?.currentStage ? stageName(editRun.data.currentStage) : "排队中"}</span>
             </>}
         />}
-        {editRun.data?.status === "FAILED" && <Alert type="error" showIcon message="文档发布失败，编辑内容已保留"
-            description={editRun.data.errorMessage}
-            action={<Button size="small" loading={retryPublication.isPending} onClick={() => retryPublication.mutate()}>
-                重试发布
-            </Button>}
+        {failedDraft && <Alert type="error" showIcon message="编辑稿已保存，发布失败"
+            description={<>{editRun.data?.errorMessage}{Boolean(editRun.data?.warnings?.length) && <ul>{editRun.data!.warnings!.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul>}</>}
+            action={<div className="phase2-publication-actions"><Button size="small" loading={retryPublication.isPending} onClick={() => retryPublication.mutate()}>重新发布</Button>
+                <Button size="small" danger loading={discardDraft.isPending} onClick={() => discardDraft.mutate()}>放弃编辑稿</Button></div>}
         />}
+        {publicationWarnings && <Alert type="warning" showIcon closable onClose={() => setPublicationWarnings(undefined)}
+            message="发布成功但有警告" description={<><div>跳过操作数：{publicationWarnings.skippedCount}</div><ul>{publicationWarnings.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></>}/>
+        }
         {saveInlineEdit.error && <Alert type="error" showIcon message="提交失败" description={saveInlineEdit.error.message}/>}
         <Drawer className="review-center-drawer" width={520} title="评审中心" open={reviewCenterOpen}
                 onClose={() => setReviewCenterOpen(false)}

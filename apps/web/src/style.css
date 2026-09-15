@@ -384,11 +384,39 @@ html, body, #root {
 }
 
 .run-log {
-    gap: 12px;
     justify-content: flex-start !important;
     color: #dbeafe !important;
     border-block-end-color: #273449 !important;
     font-family: Consolas, "Microsoft YaHei", monospace
+}
+
+.run-log-entry {
+    width: 100%;
+    min-width: 0
+}
+
+.run-log-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    min-width: 0
+}
+
+.run-log-expandable {
+    margin: -8px;
+    padding: 8px;
+    border-radius: 4px;
+    cursor: pointer
+}
+
+.run-log-expandable:hover {
+    background: rgba(148, 163, 184, .1)
+}
+
+.run-log-expandable:focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 1px
 }
 
 .run-log-time {
@@ -397,17 +425,44 @@ html, body, #root {
     white-space: nowrap
 }
 
-.run-log > span:last-child {
+.run-log-message {
+    flex: 1;
     min-width: 0;
     overflow-wrap: anywhere
 }
 
-.run-log.success span:last-child {
+.run-log.success .run-log-message {
     color: #86efac
 }
 
-.run-log.error span:last-child {
+.run-log.error .run-log-message {
     color: #fca5a5
+}
+
+.run-log-toggle {
+    flex: 0 0 auto;
+    color: #94a3b8
+}
+
+.run-log-details {
+    margin: 10px 0 2px 154px;
+    padding: 10px 12px;
+    border-left: 2px solid #4ade80;
+    border-radius: 0 4px 4px 0;
+    background: rgba(15, 23, 42, .7);
+    color: #cbd5e1;
+    font-family: "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    overflow-wrap: anywhere
+}
+
+.run-log-details ol {
+    margin: 6px 0 0;
+    padding-left: 22px
+}
+
+.run-log-details li + li {
+    margin-top: 5px
 }
 
 .run-log-empty {
@@ -419,12 +474,24 @@ html, body, #root {
 @media (max-width: 640px) {
     .run-log {
         align-items: flex-start;
-        flex-direction: column;
         gap: 4px
+    }
+
+    .run-log-summary {
+        flex-wrap: wrap;
+        gap: 4px 8px
     }
 
     .run-log-time {
         flex-basis: auto
+    }
+
+    .run-log-message {
+        flex-basis: calc(100% - 24px)
+    }
+
+    .run-log-details {
+        margin-left: 0
     }
 }
 
@@ -826,8 +893,49 @@ html, body, #root {
 }
 
 .phase2-heading-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     flex: 1;
     min-width: 0
+}
+
+.phase2-warning-help {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: #d89614;
+    cursor: help;
+    font-size: 15px
+}
+
+.phase2-warning-help:focus-visible {
+    border-radius: 50%;
+    outline: 2px solid #faad14;
+    outline-offset: 2px
+}
+
+.phase2-warning-tooltip .ant-tooltip-inner {
+    width: max-content;
+    max-width: min(620px, calc(100vw - 32px));
+    max-height: min(420px, calc(100vh - 64px));
+    overflow: auto;
+    overflow-wrap: anywhere;
+    white-space: normal
+}
+
+.phase2-warning-tooltip-content > div {
+    margin-top: 5px
+}
+
+.phase2-warning-tooltip-content ul {
+    margin: 8px 0 0;
+    padding-left: 20px
+}
+
+.phase2-warning-tooltip-content li + li {
+    margin-top: 6px
 }
 
 .phase2-heading-line h1, .phase2-heading-line h2, .phase2-heading-line h3, .phase2-heading-line h4, .phase2-heading-line h5 {
@@ -2795,6 +2903,12 @@ html, body, #root {
 .run-token-details b {
     color: #b8c0cc;
     font-weight: 400
+}
+
+.phase2-publication-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px
 }
 
 @media (max-width: 720px) {

@@ -9,7 +9,7 @@ import {access, readFile, stat} from "node:fs/promises";
 import path from "node:path";
 import {missingCompletionStages, parseToolOutput, progressOf, workerBatchIndex} from "./progress.js";
 import {indexAvailableRequirements, indexProject} from "./indexing.js";
-import {startPhase2EditWorker} from "./phase2-edit.js";
+import {restorePhase2Edit, restorePublishedPhase2Edit, startPhase2EditWorker} from "./phase2-edit.js";
 import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
 import {addUsage, emptyTokenUsage, normalizeTokens, SessionUsageTracker, type TokenUsage} from "./token-usage.js";
 
@@ -263,7 +263,9 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
         batchIndex,
         progress,
         summary: output.summary,
-        output: output.output
+        output: output.output,
+        warnings: output.warnings,
+        skipped_count: output.skipped_count
     })
 }
 
@@ -409,9 +411,20 @@ setTimeout(async () => {
 
 setTimeout(async () => {
     try {
-        const stale = await db.query(`select id,"projectId","backupPath" from "Phase2EditRun" where status='RUNNING'`);
+        const stale = await db.query(`select r.id,r."projectId",r."backupPath",r."savedAt",p."workspacePath"
+            from "Phase2EditRun" r join "Project" p on p.id=r."projectId" where r.status='RUNNING'`);
         for (const run of stale.rows) {
-            await db.query(`update "Phase2EditRun" set status='FAILED',"errorMessage"='编辑worker重启，任务已停止；备份保留供诊断',"finishedAt"=now() where id=$1`, [run.id]);
+            let recoveryError = "";
+            try {
+                if (run.backupPath) {
+                    if (run.savedAt) await restorePublishedPhase2Edit(run.workspacePath, run.backupPath);
+                    else await restorePhase2Edit(run.workspacePath, run.backupPath)
+                }
+                await indexProject(db, run.projectId, run.workspacePath)
+            } catch (error) { recoveryError = `；恢复上一发布版本失败：${describeError(error)}` }
+            const draftSaved = Boolean(run.savedAt);
+            await db.query(`update "Phase2EditRun" set status='FAILED',"draftStatus"=$2,"errorMessage"=$3,"finishedAt"=now() where id=$1`,
+                [run.id, draftSaved ? "PUBLISH_FAILED" : "NONE", draftSaved ? `编辑worker重启；编辑稿已保存，发布失败${recoveryError}` : `编辑worker重启，任务已停止${recoveryError}`]);
             await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1 and status='REBUILDING'`, [run.projectId])
         }
     } catch (error) { console.error("Stale Phase2 edit recovery failed", error) }

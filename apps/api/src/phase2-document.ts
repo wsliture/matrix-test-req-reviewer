@@ -49,7 +49,9 @@ export type Phase2Chapter = {
     number: string;
     title: string;
     rootNodeId?: string;
-    blocks: Phase2Block[]
+    blocks: Phase2Block[];
+    warnings?: string[];
+    skippedCount?: number
 };
 
 const TEST_TYPES = [
@@ -288,7 +290,8 @@ function parseDocxTableXml(xml: string) {
     return {columns: normalized[0], rows: normalized.slice(1), cells}
 }
 
-async function hydrateHardwareTables(data: Json) {
+async function hydrateHardwareTables(data: Json): Promise<string[]> {
+    const warnings: string[] = [];
     const tables: Json[] = [];
     for (const item of data.interfaces || []) {
         tables.push(...(item.overview_tables || []), ...(item.input_tables || []), ...(item.output_tables || []));
@@ -297,15 +300,23 @@ async function hydrateHardwareTables(data: Json) {
     await Promise.all(tables.map(async item => {
         if (Array.isArray(item.columns) && Array.isArray(item.rows)) return;
         const assetPath = text(item.table_asset?.path);
-        if (!assetPath) return;
-        const parsed = parseDocxTableXml(await readFile(assetPath, "utf8"));
-        if (parsed) Object.assign(item, parsed)
-    }))
+        if (!assetPath) { item.__unavailable = true; warnings.push(`跳过缺少资源的硬件表格：${text(item.title) || "未命名表格"}`); return }
+        try {
+            const parsed = parseDocxTableXml(await readFile(assetPath, "utf8"));
+            if (parsed) Object.assign(item, parsed);
+            else { item.__unavailable = true; warnings.push(`跳过无法解析的硬件表格：${text(item.title) || assetPath}`) }
+        } catch (error) {
+            item.__unavailable = true;
+            warnings.push(`跳过无法读取的硬件表格：${text(item.title) || assetPath}：${error instanceof Error ? error.message : String(error)}`)
+        }
+    }));
+    return warnings
 }
 
 function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const root = lookup.root(artifact),
         blocks: Phase2Block[] = [heading(`3 ${text(data.chapter_title) || "数据及接口需求"}`, 1), heading(`3.1 ${text(data.section_title) || "硬件接口"}`, 2, root?.id, refs(data), root?.businessId, true)];
+    const renderedTables = new Set<string>();
     (data.interfaces || []).forEach((item: Json, index: number) => {
         const number = `3.1.${index + 1}`, node = lookup.anchor(artifact, number),
             title = text(item.title || item.interface_name || item.name) || `硬件接口${index + 1}`;
@@ -319,18 +330,25 @@ function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
         // The interface heading already owns and renders the interface-level trace links.
         // Giving the overview paragraph the same anchor duplicates that exact trace block.
         if (interfaceId || overview) blocks.push(richParagraph([{text: interfaceId + (overview ? "：" : "")}, editablePart(overview, itemBinding("overview", overview, "multiline"))]));
-        let tableNumber = 1;
         const appendTables = (tables: Json[], fallback: string, field: string, selectionRole: "概述" | "输入流" | "输出流") => {
             const selectionBinding = itemBinding(field, (tables || []).map(table => text(table.table_id)).filter(Boolean), "table_selection");
             blocks.push({type: "table_selector", text: fallback,
                 selectionBinding, selectionRole});
             for (const candidate of tables || []) {
+                if (candidate.__unavailable) continue;
+                const sharedKey = text(candidate.table_id) || text(candidate.table_asset?.path);
+                if (sharedKey && renderedTables.has(sharedKey)) {
+                    blocks.push(paragraph(`该表已在前文展示：${text(candidate.table_no) || cleanTableTitle(candidate.title) || fallback}。`));
+                    continue
+                }
                 const value = normalizedTable(candidate, fallback);
                 if (value) {
-                    value.caption = `表3.1.${index + 1}-${tableNumber++}  ${cleanTableTitle(value.caption) || fallback}`;
+                    const finalNumber = text(candidate.table_no);
+                    value.caption = `${finalNumber ? `${finalNumber}  ` : ""}${cleanTableTitle(value.caption) || fallback}`;
                     value.selectionEditKey = selectionBinding?.edit_key;
                     value.sourceTableId = text(candidate.table_id);
-                    blocks.push(value)
+                    blocks.push(value);
+                    if (sharedKey) renderedTables.add(sharedKey)
                 }
             }
         };
@@ -358,18 +376,21 @@ function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
     return blocks
 }
 
-function functional(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
+function functional(data: Json, artifact: string, lookup: ReturnType<typeof maps>, warnings: string[] = []): Phase2Block[] {
     const root = lookup.root(artifact),
         blocks: Phase2Block[] = [heading(`${text(data.chapter_title_no) || "4"} ${text(data.chapter_title) || "测试类型说明"}`, 1), heading(`${text(data.section_title_no) || "4.1"} ${text(data.section_title) || "功能测试"}`, 2, root?.id, refs(data), root?.businessId)];
     const visit = (node: Json) => {
         const number = text(node.title_no), match = lookup.anchor(artifact, number),
             children = Array.isArray(node.children) ? node.children : [],
             content = node.init_content || node.other_content;
-        blocks.push(heading(`${number} ${text(node.title)}`, Math.min(number.split(".").length, 5), match?.id, refs(node), match?.businessId, children.length === 0 && Boolean(content)));
+        const placeholder = Boolean(content) && text(content.summary) === "内容未生成" && !(content.processing || []).length;
+        blocks.push(heading(`${number} ${text(node.title)}`, Math.min(number.split(".").length, 5), placeholder ? undefined : match?.id,
+            placeholder ? [] : refs(node), placeholder ? undefined : match?.businessId, !placeholder && children.length === 0 && Boolean(content)));
         if (children.length) return children.forEach(visit);
         if (!content) return;
+        if (placeholder) { blocks.push(paragraph("内容未生成（该缺项没有可编辑的 raw 目标）。")); return }
         const containerExtra = {container_id: number, identity: {title_no: number}};
-        const leafBinding = (field: string, value: unknown, kind?: Phase2EditBinding["kind"]) => binding(artifact, match?.id, field, value, containerExtra, kind);
+        const leafBinding = (field: string, value: unknown, kind?: Phase2EditBinding["kind"]) => placeholder ? undefined : binding(artifact, match?.id, field, value, containerExtra, kind);
         if (text(content.summary)) blocks.push(richParagraph([editablePart(content.summary, leafBinding("summary", content.summary, "multiline"))]));
         const inputItems = formatFunctionalFlowItems(content.input_flow);
         blocks.push(heading(`${number}.1 输入流说明`, 5), {
@@ -377,10 +398,12 @@ function functional(data: Json, artifact: string, lookup: ReturnType<typeof maps
             items: inputItems,
             itemBindings: inputItems.map((_, index) => leafBinding(`input_flow.${index}`, content.input_flow?.[index], "list_item"))
         }, heading(`${number}.2 处理`, 5));
-        const tables = new Map<string, {item: Json; index: number}>((content.tables || []).map((item: Json, index: number) => [text(item.table_id), {item, index}]));
+        const tableList: Json[] = content.tables || [];
+        const tables = new Map<string, {item: Json; index: number}>(tableList.map((item: Json, index: number) => [text(item.table_id), {item, index}]));
+        const renderedTables = new Set<string>();
         const functionalPrefix = text(content.tr_code || node.tr_code || content.processing?.[0]?.requirement_id?.replace(/-\d+$/u, ""));
         const requirementBinding: Phase2RequirementBinding = {
-            container_key: editKey({artifact, ...containerExtra, field: "processing"}), allow_add: true,
+            container_key: editKey({artifact, ...containerExtra, field: "processing"}), allow_add: !placeholder,
             prefix: functionalPrefix, mode: "functional"
         };
         for (const processing of content.processing || []) {
@@ -401,7 +424,8 @@ function functional(data: Json, artifact: string, lookup: ReturnType<typeof maps
             });
             for (const tableRef of processing.table_refs || []) {
                 const found = tables.get(text(tableRef));
-                if (!found) continue;
+                if (!found) { warnings.push(`跳过未知功能表格引用：${text(tableRef) || "空引用"}`); continue }
+                if (renderedTables.has(text(tableRef))) continue;
                 const {item, index: tableIndex} = found;
                 const value = normalizedTable(item, "关联表格");
                 if (value) {
@@ -417,11 +441,25 @@ function functional(data: Json, artifact: string, lookup: ReturnType<typeof maps
                         row_keys: (value.rows || []).map((_, rowIndex) => editKey({artifact, ...containerExtra, field: `tables.${tableIndex}.rows.${rowIndex}`})),
                         column_keys: (value.columns || []).map((_, columnIndex) => editKey({artifact, ...containerExtra, field: `tables.${tableIndex}.columns.${columnIndex}`})),
                         new_row_columns: value.columns || []};
-                    blocks.push(value)
-                }
+                    blocks.push(value);
+                    renderedTables.add(text(tableRef))
+                } else warnings.push(`跳过结构不可展示的功能表格：${text(item.title || item.table_id) || "未命名表格"}`)
             }
         }
-        blocks.push({type: "requirement_actions", requirementBinding});
+        for (const [tableIndex, item] of tableList.entries()) {
+            const id = text(item.table_id);
+            if (id && renderedTables.has(id)) continue;
+            const value = normalizedTable(item, "关联表格");
+            if (!value) { warnings.push(`跳过结构不可展示的功能表格：${text(item.title || item.table_id) || "未命名表格"}`); continue }
+            const tableNo = text(item.table_no), tableTitle = cleanTableTitle(item.title) || "关联表格";
+            value.caption = [tableNo, tableTitle].filter(Boolean).join(" ");
+            value.captionParts = [{text: tableNo ? `${tableNo} ` : ""}, editablePart(tableTitle, leafBinding(`tables.${tableIndex}.title`, tableTitle))];
+            value.headerBindings = (value.columns || []).map((column, columnIndex) => leafBinding(`tables.${tableIndex}.columns.${columnIndex}`, column, "table_header"));
+            value.cellBindings = (value.rows || []).map((row, rowIndex) => row.map((cell, cellIndex) => leafBinding(`tables.${tableIndex}.rows.${rowIndex}.${cellIndex}`, cell, "table_cell")));
+            blocks.push(value);
+            if (id) renderedTables.add(id)
+        }
+        if (!placeholder) blocks.push({type: "requirement_actions", requirementBinding});
         const outputItems = formatFunctionalFlowItems(content.output_flow);
         blocks.push(heading(`${number}.3 输出流说明`, 5), {
             type: "list",
@@ -503,15 +541,17 @@ export async function buildPhase2DocumentFromDataDir(dataDir: string, requiremen
         try {
             const data = JSON.parse(await readFile(path.join(dataDir, artifact), "utf8"));
             let blocks: Phase2Block[];
+            const warnings: string[] = Array.isArray(data.warnings) ? data.warnings.map(text).filter(Boolean) : [];
             if (number === "1") blocks = chapter1(data, artifact, lookup);
             else if (number === "2") blocks = chapter2(data, artifact, lookup);
             else if (number === "3.1") {
-                await hydrateHardwareTables(data);
+                warnings.push(...await hydrateHardwareTables(data));
                 blocks = hardware(data, artifact, lookup)
-            } else if (number === "4.1") blocks = functional(data, artifact, lookup);
+            } else if (number === "4.1") blocks = functional(data, artifact, lookup, warnings);
             else if (number === "6") blocks = traceability(data, artifact, lookup);
             else blocks = nonFunctional(data, artifact, number, title, lookup);
-            chapters.push({artifact, number, title, rootNodeId: lookup.root(artifact)?.id, blocks})
+            chapters.push({artifact, number, title, rootNodeId: lookup.root(artifact)?.id, blocks,
+                ...(warnings.length ? {warnings: [...new Set(warnings)], skippedCount: warnings.filter(item => item.startsWith("跳过")).length} : {})})
         } catch (error: any) {
             if (error?.code === "ENOENT") continue;
             chapters.push({

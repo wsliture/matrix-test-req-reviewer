@@ -1,8 +1,9 @@
 import {createElement, useCallback, useEffect, useRef, useState} from "react";
-import {Alert, Button, Input, Modal, Popconfirm, Select, Tag} from "antd";
-import {AuditOutlined, DeleteOutlined, EditOutlined, PlusOutlined} from "@ant-design/icons";
+import {Alert, Button, Input, Modal, Popconfirm, Select, Tag, Tooltip} from "antd";
+import {AuditOutlined, DeleteOutlined, EditOutlined, PlusOutlined, QuestionCircleOutlined} from "@ant-design/icons";
 import type {Phase2Block, Phase2Chapter, Phase2EditBinding, Phase2ReferenceOperation, Phase2RequirementOperation, Phase2TableOperation, Phase2TextPart, RequirementDiffAnnotation, SourceRefOption, SourceTableOption, TraceLink} from "./api";
 import {SortableTableList} from "./SortableTableList";
+import {chapterWarningForBlock, type ChapterWarningPresentation} from "./chapterWarning";
 
 type Props = {
     chapters: Phase2Chapter[];
@@ -55,13 +56,13 @@ function TraceSourceLinks({targetId, links, onSource, inline = false, editing, b
     inline?: boolean; editing?: boolean; binding?: Phase2EditBinding; onEditSources?: (binding: Phase2EditBinding) => void;
     drafts?: Record<string, unknown>; availableSourceRefs?: SourceRefOption[]; annotation?: RequirementDiffAnnotation
 }) {
-    if (!targetId) return null;
+    if (!targetId && !(editing && binding)) return null;
     const values = [...new Map(links.filter(link => link.targetNodeId === targetId)
         .map(link => [link.sourceNodeId, link])).values()];
     const hasDraft = Boolean(editing && binding && Object.prototype.hasOwnProperty.call(drafts || {}, binding.edit_key));
     const draftRefs = hasDraft ? (drafts?.[binding!.edit_key] as string[] || []) : undefined;
     const diffRefs = annotation?.sourceRefs;
-    if (!values.length && !hasDraft && !diffRefs?.length && !annotation?.changedFields?.includes("sourceRefs")) return null;
+    if (!values.length && !hasDraft && !diffRefs?.length && !annotation?.changedFields?.includes("sourceRefs") && !(editing && binding)) return null;
     const Wrapper = inline ? "span" : "div";
     const openEditor = () => editing && binding && onEditSources?.(binding);
     const counterpart = new Set(annotation?.counterpartSourceRefs || []);
@@ -216,7 +217,7 @@ function DiffText({annotation, businessId}: {annotation: RequirementDiffAnnotati
         {visible.map((segment, index) => <span key={index} className={segment.type === "DELETE" ? "diff-text-delete" : segment.type === "INSERT" ? "diff-text-insert" : undefined}>{segment.text}</span>)}</>
 }
 
-function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, availableTables, availableSourceRefs}: {
+function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, availableTables, availableSourceRefs, chapterWarning}: {
     block: Phase2Block;
     links: TraceLink[];
     activeId?: string;
@@ -236,6 +237,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     evaluationDisabled?: boolean;
     availableTables?: SourceTableOption[];
     availableSourceRefs?: SourceRefOption[];
+    chapterWarning?: ChapterWarningPresentation;
 }) {
     const [requirementModalOpen, setRequirementModalOpen] = useState(false);
     const [newRequirement, setNewRequirement] = useState({content: "", related: "", suffix: "", sourceRefs: [] as string[]});
@@ -385,7 +387,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
             </div>)}
             <Modal title={`${editingRequirementDraftKey ? "编辑待新增" : "新增"}${block.requirementBinding.interface_label ? `${block.requirementBinding.interface_label} ` : ""}TR`}
                 open={requirementModalOpen} width={680} okText="加入修改" cancelText="取消"
-                okButtonProps={{disabled: !newRequirement.content.trim() || newRequirement.sourceRefs.length === 0 || !functionalRequirement && !newRequirement.related.trim()}}
+                okButtonProps={{disabled: !newRequirement.content.trim() || !functionalRequirement && !newRequirement.related.trim()}}
                 onOk={submitRequirement} onCancel={closeRequirementEditor} destroyOnHidden>
                 <div className="phase2-new-requirement-form">
                     {functionalRequirement && <Input addonBefore={requirementPrefix(block.requirementBinding.prefix)} value={newRequirement.suffix}
@@ -401,7 +403,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
                         : <Input.TextArea value={newRequirement.related} autoSize={{minRows: 2}} placeholder="相关说明"
                             onChange={event => setNewRequirement(current => ({...current, related: event.target.value}))}/>) }
                     <Select mode="multiple" value={newRequirement.sourceRefs} style={{width: "100%"}}
-                        placeholder="选择追溯来源（至少一个主需求来源）"
+                        placeholder="选择追溯来源（可选）"
                         options={(availableSourceRefs || []).map(option => ({value: option.value, label: `${option.document_name} ${option.number || option.title}`}))}
                         onChange={sourceRefs => setNewRequirement(current => ({...current, sourceRefs}))}/>
                 </div>
@@ -438,6 +440,13 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
         return <section {...anchorProps} className={`phase2-heading-block${active}${diffClass}`}>
             <div className="phase2-heading-line"><div className="phase2-heading-title">
                 {createElement(headingName, null, renderParts(block.parts, block.text, {editing, drafts, onDraft, annotation}))}
+                {chapterWarning && <Tooltip overlayClassName="phase2-warning-tooltip" title={<div className="phase2-warning-tooltip-content">
+                    <strong>本章已容错完成</strong>
+                    <div>跳过操作数：{chapterWarning.skippedCount}</div>
+                    <ul>{chapterWarning.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul>
+                </div>}>
+                    <span className="phase2-warning-help" tabIndex={0} role="img" aria-label="查看本章容错警告"><QuestionCircleOutlined/></span>
+                </Tooltip>}
             </div>
                 <div className="phase2-heading-actions">{mode === "review" && block.evaluable && block.anchorId &&
                     <Button type="primary" icon={<AuditOutlined/>} className="evaluation-trigger"
@@ -580,6 +589,7 @@ export function Phase2DocumentRenderer({chapters, links, activeId, mode = "revie
         <header><h1>第三方测试需求</h1></header>
         {chapters.map(chapter => <div className="phase2-chapter" data-artifact={chapter.artifact} key={chapter.artifact}>
             {chapter.blocks.map((block, index) => <Block key={`${chapter.artifact}-${index}`} block={block}
+                                                         chapterWarning={chapterWarningForBlock(chapter, index)}
                                                          links={links} activeId={activeId} mode={mode} annotation={annotationForBlock(block)} diffAnnotationsByNode={annotationsByNode} selectedEntityUid={selectedEntityUid} reviewScores={reviewScores}
                                                          onSource={onSource} onEvaluate={onEvaluate} editing={editing} drafts={drafts} onDraft={onDraft} onEditSources={onEditSources} onEditTables={onEditTables} tableOperations={tableOperations} onTableOperation={onTableOperation}
                                                          requirementOperations={requirementOperations} onRequirementOperation={onRequirementOperation}

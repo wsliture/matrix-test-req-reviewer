@@ -61,11 +61,14 @@ export async function backupPhase2Edit(workspace: string, runId: string, request
     await rm(root, {recursive: true, force: true});
     await mkdir(root, {recursive: true});
     const files = new Set<string>([".matrix/data/phase2-test-traceability.json",
-        ".matrix/reports/phase2-test-traceability.docx", ".matrix/reports/phase2-test-requirements.docx"]);
+        ".matrix/reports/phase2-test-traceability.docx", ".matrix/reports/phase2-test-requirements.docx",
+        ".matrix/data/phase2-editor-state.json"]);
     for (const artifact of requestedArtifacts(request)) {
         files.add(`.matrix/data/${artifact}`);
         if (reportByArtifact[artifact]) files.add(`.matrix/reports/${reportByArtifact[artifact]}`);
         if (artifact === "functional-test-content.json") {
+            files.add(".matrix/data/functional-init-content.json");
+            files.add(".matrix/reports/functional-init-content.docx");
             files.add(".matrix/data/functional-other-content.json");
             files.add(".matrix/reports/functional-other-content.docx")
         }
@@ -81,7 +84,9 @@ export async function backupPhase2Edit(workspace: string, runId: string, request
         try { await stat(source); await mkdir(path.dirname(target), {recursive: true}); await cp(source, target); copied.push(relative) }
         catch (error: any) { if (error?.code === "ENOENT") absent.push(relative); else throw error }
     }
-    await writeFile(path.join(root, "manifest.json"), JSON.stringify({files: copied, absent}, null, 2));
+    const drafts = mutationFiles.map(file => path.relative(workspace, path.resolve(file)))
+        .filter(relative => relative !== ".matrix/data/phase2-editor-state.json");
+    await writeFile(path.join(root, "manifest.json"), JSON.stringify({files: copied, absent, drafts}, null, 2));
     return root
 }
 
@@ -89,6 +94,13 @@ export async function restorePhase2Edit(workspace: string, root: string) {
     const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
     for (const relative of manifest.files || []) await copyIfExists(path.join(root, relative), path.join(workspace, relative))
     for (const relative of manifest.absent || []) await rm(path.join(workspace, relative), {recursive: true, force: true})
+}
+
+export async function restorePublishedPhase2Edit(workspace: string, root: string) {
+    const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    const drafts = new Set<string>(manifest.drafts || []);
+    for (const relative of manifest.files || []) if (!drafts.has(relative)) await copyIfExists(path.join(root, relative), path.join(workspace, relative));
+    for (const relative of manifest.absent || []) if (!drafts.has(relative)) await rm(path.join(workspace, relative), {recursive: true, force: true})
 }
 
 export function startPhase2EditWorker(connection: Redis, db: Pool) {
@@ -102,6 +114,8 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         let publishedRevisionId = "";
         let editSaved = Boolean(row.savedAt);
         let generationMode = false;
+        const warnings: string[] = [];
+        let skippedCount = 0;
         const rebuildOnly = job.data.rebuildOnly === true;
         const stageTimings: Record<string, {startedAt: string; finishedAt: string; durationMs: number}> = {};
         const timed = async <T>(stage: string, work: () => Promise<T>) => {
@@ -114,6 +128,15 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
         };
         try {
             const request = typeof row.request === "string" ? JSON.parse(row.request) : row.request;
+            if (job.data.discardDraft === true) {
+                if (!row.backupPath) throw new Error("缺少可恢复的编辑备份");
+                await restorePhase2Edit(row.workspacePath, row.backupPath);
+                await indexProject(db, row.projectId, row.workspacePath, [], {skipDocuments: true});
+                await db.query(`update "Phase2EditRun" set status='CANCELLED',progress=100,"currentStage"='discarded',"draftStatus"='NONE',"errorMessage"=null,"finishedAt"=now() where id=$1`, [runId]);
+                await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
+                return {ok: true, discarded: true}
+            }
+            await db.query(`update "Phase2EditRun" set warnings='[]'::jsonb,"skippedCount"=0 where id=$1`, [runId]);
             const batch = row.operation === "batch";
             generationMode = request.generation_mode === true;
             let applied: any;
@@ -132,7 +155,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 backupPath = await timed("backup", () => backupPhase2Edit(row.workspacePath, runId, request, mutation.files || []));
                 await db.query(`update "Phase2EditRun" set "backupPath"=$1,"currentStage"='apply',progress=10 where id=$2`, [backupPath, runId]);
                 applied = await timed("apply", () => call<any>(batch ? "/v1/phase2/editor/apply-batch" : "/v1/phase2/editor/apply", request));
-                await db.query(`update "Phase2EditRun" set "savedAt"=now(),"savedRevision"=$1,"applyResult"=$2,"currentStage"='saved',progress=15 where id=$3`,
+                await db.query(`update "Phase2EditRun" set "savedAt"=now(),"savedRevision"=$1,"applyResult"=$2,"currentStage"='saved',"draftStatus"='SAVED',progress=15 where id=$3`,
                     [applied.revision || null, JSON.stringify(applied), runId]);
                 editSaved = true
             }
@@ -150,7 +173,10 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             const all = generationMode ? modes : [...modes, "generate_phase2_traceability", "finalize_phase2_document"];
             for (let i = 0; i < all.length; i++) {
                 await db.query(`update "Phase2EditRun" set "currentStage"=$1,progress=$2 where id=$3`, [all[i], 15 + Math.floor(i / all.length * 70), runId]);
-                await timed(all[i], () => call("/v1/phase2/workflow/execute", {directory: row.workspacePath, mode: all[i], editor_fast_path: true}))
+                const result: any = await timed(all[i], () => call("/v1/phase2/workflow/execute", {directory: row.workspacePath, mode: all[i], editor_fast_path: true}));
+                if (Array.isArray(result?.warnings)) warnings.push(...result.warnings.map(String));
+                skippedCount += Number(result?.skipped_count || 0);
+                await db.query(`update "Phase2EditRun" set warnings=$1,"skippedCount"=$2 where id=$3`, [JSON.stringify([...new Set(warnings)]), skippedCount, runId])
             }
             if (!generationMode) {
                 const total = path.join(row.workspacePath, ".matrix", "reports", "phase2-test-requirements.docx");
@@ -161,7 +187,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
                 ? indexAvailableRequirements(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [])
                 : indexProject(db, row.projectId, row.workspacePath, applied.requirement_id_renames || [], {skipDocuments: true}));
             if (generationMode) {
-                await db.query(`update "Phase2EditRun" set status='SUCCEEDED',progress=100,"currentStage"='deferred_analysis',"publishedAt"=now(),"finishedAt"=now() where id=$1`, [runId]);
+                await db.query(`update "Phase2EditRun" set status='SUCCEEDED',progress=100,"currentStage"='deferred_analysis',"draftStatus"='NONE',"publishedAt"=now(),"finishedAt"=now() where id=$1`, [runId]);
                 await db.query(`insert into "AuditLog" ("userId",action,"resourceType","resourceId",detail) values ($1,'PHASE2_EDIT_SAVED_DURING_GENERATION','Phase2EditRun',$2,$3)`,
                     [row.userId, runId, JSON.stringify({artifacts, deferredAnalysis: true})]);
                 return {ok: true, deferredAnalysis: true}
@@ -175,7 +201,7 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             const client = await db.connect();
             try {
                 await client.query("begin");
-                await client.query(`update "Phase2EditRun" set status='SUCCEEDED',progress=100,"currentStage"='complete',"publishedAt"=now(),"finishedAt"=now() where id=$1`, [runId]);
+                await client.query(`update "Phase2EditRun" set status='SUCCEEDED',progress=100,"currentStage"='complete',"draftStatus"='NONE',"publishedAt"=now(),"finishedAt"=now() where id=$1`, [runId]);
                 await client.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
                 await client.query(`insert into "AuditLog" ("userId",action,"resourceType","resourceId",detail) values ($1,'PHASE2_EDIT_REBUILT','Phase2EditRun',$2,$3)`,
                     [row.userId, runId, JSON.stringify({operation: row.operation, targetBusinessId: row.targetBusinessId,
@@ -189,16 +215,18 @@ export function startPhase2EditWorker(connection: Redis, db: Pool) {
             try {
                 if (publishedRevisionId) await removeRequirementRevision(db, publishedRevisionId);
                 if (backupPath) {
-                    await restorePhase2Edit(row.workspacePath, backupPath);
+                    if (editSaved) await restorePublishedPhase2Edit(row.workspacePath, backupPath);
+                    else await restorePhase2Edit(row.workspacePath, backupPath);
                     if (generationMode) await indexAvailableRequirements(db, row.projectId, row.workspacePath);
                     else await indexProject(db, row.projectId, row.workspacePath, [], {skipDocuments: true})
                 }
                 if (!generationMode) await db.query(`update "Project" set status='READY_FOR_REVIEW',"updatedAt"=now() where id=$1`, [row.projectId]);
                 const detail = editSaved ? `${message}（编辑稿已保存，继续使用上一发布版本）` : `${message}（修改未保存，上一发布版本未受影响）`;
-                await db.query(`update "Phase2EditRun" set status='FAILED',"currentStage"='publish_failed',"errorMessage"=$1,"finishedAt"=now() where id=$2`, [detail, runId])
+                await db.query(`update "Phase2EditRun" set status='FAILED',"currentStage"='publish_failed',"draftStatus"=$1,"errorMessage"=$2,"finishedAt"=now() where id=$3`, [editSaved ? "PUBLISH_FAILED" : "NONE", detail, runId])
             } catch (rollbackError) {
                 await db.query(`update "Project" set status='FAILED',"updatedAt"=now() where id=$1`, [row.projectId]);
-                await db.query(`update "Phase2EditRun" set status='FAILED',"errorMessage"=$1,"finishedAt"=now() where id=$2`, [`${message}；回滚失败：${String(rollbackError)}`, runId])
+                await db.query(`update "Phase2EditRun" set status='FAILED',"draftStatus"=$1,"errorMessage"=$2,"finishedAt"=now() where id=$3`,
+                    [editSaved ? "PUBLISH_FAILED" : "NONE", `${message}；回滚失败：${String(rollbackError)}`, runId])
             }
             throw error
         } finally {

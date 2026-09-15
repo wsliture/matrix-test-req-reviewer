@@ -211,7 +211,9 @@ export type Phase2Chapter = {
     number: string;
     title: string;
     rootNodeId?: string;
-    blocks: Phase2Block[]
+    blocks: Phase2Block[];
+    warnings?: string[];
+    skippedCount?: number
 };
 export type ReviewData = {
     project: {id: string; name: string; status?: string};
@@ -261,11 +263,13 @@ export type SourceRefOption = {value: string; role: string; document_name: strin
 export type SourceTableOption = {table_id: string; title: string; source_ref: string; document_name: string; section_number: string; section_title: string; section_path_titles?: string[]; table_html: string; selected_location?: string; order: number};
 export type Phase2EditorDescriptor = {artifact: string; business_id?: string; revision: string;
     operation_capabilities: {update: boolean; add: boolean; delete: boolean}; form_schema: EditorField[];
-    value: Record<string, unknown>; available_source_refs: SourceRefOption[]};
+    value: Record<string, unknown>; available_source_refs: SourceRefOption[];
+    editable?: boolean; disabled_reason?: string; warnings?: string[]; skipped_count?: number};
 export type Phase2EditRun = {id: string; status: string; progress: number; currentStage?: string; errorMessage?: string;
     savedAt?: string; savedRevision?: string; publishedAt?: string; publicationStatus?: "QUEUED" | "BUILDING" | "PUBLISHED" | "FAILED";
+    warnings?: string[]; skippedCount?: number; draftStatus?: "NONE" | "SAVED" | "PUBLISH_FAILED";
     stageTimings?: Record<string, {startedAt: string; finishedAt: string; durationMs: number}>; startedAt?: string; finishedAt?: string};
-export type Phase2InlineDescriptor = {revision: string; artifact_revisions?: Record<string, string>; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]};
+export type Phase2InlineDescriptor = {revision: string; artifact_revisions?: Record<string, string>; available_source_refs: SourceRefOption[]; available_tables: SourceTableOption[]; warnings?: string[]; skipped_count?: number};
 export type RequirementRevision = {id: string; sequence: number; versionLabel: string;
     versionName?: string;
     kind: "GENERATED_BASELINE" | "MIGRATED_BASELINE" | "PUBLISHED"; parentRevisionId?: string; baselineRevisionId?: string;

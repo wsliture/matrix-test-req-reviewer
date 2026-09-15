@@ -69,6 +69,9 @@ model Phase2EditRun {
   expectedRevision String
   savedRevision String?
   backupPath String?
+  warnings Json?
+  skippedCount Int @default(0)
+  draftStatus String @default("NONE")
   errorMessage String?
   request Json
   applyResult Json?
