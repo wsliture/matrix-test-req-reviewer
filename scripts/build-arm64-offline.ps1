@@ -121,14 +121,17 @@ if (-not $SkipBuild) {
 $ThirdPartyImageDefinitions = @(
   @{ Source = "postgres:16-alpine"; Target = "requirements-manager-postgres:arm64" },
   @{ Source = "redis:7-alpine"; Target = "requirements-manager-redis:arm64" },
-  @{ Source = "minio/minio:RELEASE.2025-04-22T22-12-26Z"; Target = "requirements-manager-minio:arm64" }
+  # MinIO publishes release images on Quay. The historical Docker Hub path can
+  # return "insufficient_scope" even though the same release exists on Quay.
+  @{ Source = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"; Target = "requirements-manager-minio:arm64" }
 )
 foreach ($Definition in $ThirdPartyImageDefinitions) {
   Write-Host "构建ARM64基础镜像：$($Definition.Source) -> $($Definition.Target)"
   Invoke-Checked "docker" (@(
     "buildx", "build",
     "--platform", "linux/arm64",
-    "--load",
+    "--load"
+  ) + $BuildProxyArguments + @(
     "--build-arg", "BASE_IMAGE=$($Definition.Source)",
     "-t", $Definition.Target,
     "-f", (Join-Path $ProjectRoot "docker/third-party.Dockerfile"),
