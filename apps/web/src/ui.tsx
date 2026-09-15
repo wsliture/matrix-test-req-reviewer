@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
 import {
     Alert,
@@ -426,7 +426,8 @@ function ChapterStatus({project, run}: { project: Project; run?: Phase2Run }) {
 function ProjectPage() {
     const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(),
         user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(false),
-        [debugDirty, setDebugDirty] = useState(false), query = useQuery({
+        [debugDirty, setDebugDirty] = useState(false), projectContentRef = useRef<HTMLDivElement>(null),
+        pendingContentScrollRef = useRef<number | undefined>(undefined), query = useQuery({
         queryKey: ["project", id],
         queryFn: () => api<Project>(`/projects/${id}`),
         refetchInterval: query => {
@@ -470,6 +471,17 @@ function ProjectPage() {
         window.addEventListener("beforeunload", beforeUnload);
         return () => window.removeEventListener("beforeunload", beforeUnload)
     }, [debugDirty]);
+    useLayoutEffect(() => {
+        const contentOffset = pendingContentScrollRef.current, content = projectContentRef.current;
+        if (contentOffset === undefined || !content) return;
+        pendingContentScrollRef.current = undefined;
+        if (debugOpen) {
+            content.scrollTop = contentOffset
+        } else {
+            const contentDocumentTop = window.scrollY + content.getBoundingClientRect().top;
+            window.scrollTo({top: Math.max(0, contentDocumentTop + contentOffset)})
+        }
+    }, [debugOpen]);
     if (query.isLoading) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     if (query.error) {
         return <Shell backTo="/" backLabel="返回项目列表"><Content className="page"><Alert type="warning" showIcon
@@ -480,9 +492,16 @@ function ProjectPage() {
     const p = query.data, latest = p.runs[0];
     const running = latest?.status === "RUNNING" || latest?.status === "QUEUED";
     const runLabel = phase2RunButtonLabel(latest?.status);
-    const detail = <Content className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
+    const detail = <Content ref={projectContentRef} className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
         {user?.role === "ADMIN" && <Button type={debugOpen ? "primary" : "default"} icon={<BugOutlined/>} onClick={() => {
             if (debugOpen && !confirmDebugLeave()) return;
+            const content = projectContentRef.current;
+            if (content && !window.matchMedia("(max-width: 900px)").matches) {
+                const contentDocumentTop = window.scrollY + content.getBoundingClientRect().top;
+                pendingContentScrollRef.current = debugOpen
+                    ? content.scrollTop
+                    : Math.max(0, window.scrollY - contentDocumentTop)
+            }
             setDebugOpen(value => !value)
         }}>{debugOpen ? "关闭调试模式" : "调试模式"}</Button>}</Space><ChapterStatus project={p} run={latest}/>
         {p.status === "READY_FOR_REVIEW" && <div className="project-workbench-entry">
