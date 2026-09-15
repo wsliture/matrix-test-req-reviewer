@@ -78,6 +78,7 @@ import {
     type ReviewRecord,
     type ReviewScores,
     type RunEvent,
+    type RunEventHistory,
     saveDownload,
     resetSessionExpiredNotification,
     subscribeToSessionExpired,
@@ -92,7 +93,7 @@ import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
 import {activityPresentation, phase2RunButtonLabel, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
 import {AppHeader} from "./AppHeader";
-import {isExpansionKey, runWarningDetails, toggleExpandedEvent} from "./runLogDetails";
+import {isExpansionKey, isTerminalRunStatus, mergeRunEvents, runWarningDetails, toggleExpandedEvent} from "./runLogDetails";
 
 const {Content, Sider} = Layout;
 
@@ -335,6 +336,7 @@ function RunLogs({run, onEvents, scrollPositions}: {
     scrollPositions: {current: Map<string, number>};
 }) {
     const [events, setEvents] = useState<RunEvent[]>([]), [connection, setConnection] = useState("等待任务"),
+        [historyError, setHistoryError] = useState(false),
         [runState, setRunState] = useState<Phase2Run | undefined>(run),
         [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set()),
         [initialEventsLoaded, setInitialEventsLoaded] = useState(false),
@@ -344,25 +346,42 @@ function RunLogs({run, onEvents, scrollPositions}: {
         setEvents([]);
         setExpandedEvents(new Set());
         setInitialEventsLoaded(false);
+        setHistoryError(false);
         pendingRestoreRef.current = true;
         if (!run) return;
         let active = true;
-        const merge = (rows: RunEvent[]) => setEvents(previous => {
-            const values = new Map(previous.map(item => [item.id, item]));
-            rows.forEach(item => values.set(item.id, item));
-            return [...values.values()].sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)))
-        });
-        api<Phase2Run>(`/phase2-runs/${run.id}`).then(value => {
-            if (active && value.id === run.id) merge([...(value.events || [])].reverse())
-        }).catch(() => undefined).finally(() => {
-            if (active) setInitialEventsLoaded(true)
-        });
-        if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status)) {
-            setConnection("任务已结束");
-            return () => {
-                active = false
+        setConnection("正在加载历史日志");
+        void (async () => {
+            let after: string | undefined;
+            try {
+                do {
+                    const query = new URLSearchParams({limit: "200"});
+                    if (after !== undefined) query.set("after", after);
+                    const page = await api<RunEventHistory>(`/phase2-runs/${run.id}/event-history?${query}`);
+                    if (!active) return;
+                    setEvents(previous => mergeRunEvents(previous, page.items));
+                    if (!page.hasMore) break;
+                    if (!page.nextCursor || page.nextCursor === after) throw new Error("历史日志分页游标未推进");
+                    after = page.nextCursor
+                } while (active)
+            } catch {
+                if (active) setHistoryError(true)
+            } finally {
+                if (active) setInitialEventsLoaded(true)
             }
+        })();
+        return () => { active = false }
+    }, [run?.id]);
+    useEffect(() => {
+        if (!run) {
+            setConnection("等待任务");
+            return
         }
+        if (isTerminalRunStatus(run.status)) {
+            setConnection("任务已结束");
+            return
+        }
+        let active = true;
         let source: EventSource | undefined;
         const connect = () => {
             if (!active) return;
@@ -372,7 +391,7 @@ function RunLogs({run, onEvents, scrollPositions}: {
                 if (!active) return;
                 const rows = JSON.parse((raw as MessageEvent).data) as RunEvent[];
                 if (rows.length) {
-                    merge(rows);
+                    setEvents(previous => mergeRunEvents(previous, rows));
                     onEvents()
                 }
                 setConnection("实时日志已连接")
@@ -381,7 +400,10 @@ function RunLogs({run, onEvents, scrollPositions}: {
                 if (!active) return;
                 const state = JSON.parse((raw as MessageEvent).data) as Partial<Phase2Run> | null;
                 if (state?.id === run.id) setRunState(previous => ({...(previous || run), ...state} as Phase2Run));
-                setConnection("实时日志已连接")
+                if (state?.status && isTerminalRunStatus(state.status)) {
+                    setConnection("任务已结束");
+                    source?.close()
+                } else setConnection("实时日志已连接")
             });
             source.onerror = () => {
                 if (active) setConnection("实时日志连接中断，正在重连")
@@ -411,6 +433,7 @@ function RunLogs({run, onEvents, scrollPositions}: {
         }
     }, [run?.id, scrollPositions]);
     return <><RunMetrics run={runState}/><Card size="small" title="实时运行日志" extra={<Tag>{connection}</Tag>} className="run-log-card">
+        {historyError && <Alert type="warning" showIcon message="历史日志加载失败，可刷新重试"/>}
         <div ref={scrollRef} className="run-log-scroll" onScroll={event => {
             if (run?.id) scrollPositions.current.set(run.id, event.currentTarget.scrollTop)
         }}>

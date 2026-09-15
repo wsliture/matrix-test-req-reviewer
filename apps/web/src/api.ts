@@ -240,6 +240,7 @@ export type EditTimeSummary = {myDurationMs: number; projectDurationMs: number;
 export type MissingReview = { id: string; number: string; title: string };
 
 export type RunEvent = { id: string; type: string; payload: Record<string, unknown>; createdAt: string };
+export type RunEventHistory = {items: RunEvent[]; nextCursor?: string; hasMore: boolean};
 export type TokenUsage = {input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number;
     total: number; complete: boolean};
 export type Phase2Run = {

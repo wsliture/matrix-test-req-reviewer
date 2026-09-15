@@ -25,3 +25,16 @@ export function toggleExpandedEvent(ids: ReadonlySet<string>, eventId: string) {
 export function isExpansionKey(key: string) {
     return key === "Enter" || key === " "
 }
+
+export function mergeRunEvents<T extends {id: string}>(previous: T[], rows: T[]) {
+    const values = new Map(previous.map(item => [item.id, item]));
+    rows.forEach(item => values.set(item.id, item));
+    return [...values.values()].sort((left, right) => {
+        const leftId = BigInt(left.id), rightId = BigInt(right.id);
+        return leftId < rightId ? -1 : leftId > rightId ? 1 : 0
+    })
+}
+
+export function isTerminalRunStatus(status: string) {
+    return status === "SUCCEEDED" || status === "FAILED" || status === "CANCELLED"
+}

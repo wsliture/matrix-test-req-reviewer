@@ -1,5 +1,5 @@
 import {readWithRunClock, withElapsed} from "./run-clock.js";
-import {BadRequestException, Body, ConflictException, Controller, Get, Injectable, MessageEvent, Param, Patch, Post, Sse} from "@nestjs/common";
+import {BadRequestException, Body, ConflictException, Controller, Get, Injectable, MessageEvent, Param, Patch, Post, Query, Sse} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
 import {interval, map, merge, Observable, startWith, switchMap} from "rxjs";
@@ -116,6 +116,34 @@ export class RunsService {
         })
     }
 
+    async eventHistory(id: string, after?: string, requestedLimit?: string) {
+        let cursor = BigInt(0);
+        if (after !== undefined) {
+            try {
+                cursor = BigInt(after)
+            } catch {
+                throw new BadRequestException("after必须是有效的事件ID")
+            }
+            if (cursor < BigInt(0)) throw new BadRequestException("after必须是非负事件ID")
+        }
+        const parsedLimit = requestedLimit === undefined ? 200 : Number(requestedLimit);
+        if (!Number.isInteger(parsedLimit) || parsedLimit < 1) {
+            throw new BadRequestException("limit必须是正整数")
+        }
+        const limit = Math.min(parsedLimit, 500);
+        const rows = await this.db.runEvent.findMany({
+            where: {runId: id, id: {gt: cursor}},
+            orderBy: {id: "asc"},
+            take: limit + 1
+        });
+        const hasMore = rows.length > limit, items = rows.slice(0, limit);
+        return {
+            items: items.map(item => ({...item, id: item.id.toString()})),
+            nextCursor: items.length ? items.at(-1)!.id.toString() : undefined,
+            hasMore
+        }
+    }
+
     async cancel(id: string) {
         const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}, include: {project: true}});
         if (!(["QUEUED", "RUNNING"] as string[]).includes(run.status)) throw new ConflictException("任务已经结束，无法终止");
@@ -192,6 +220,11 @@ export class RunsController {
 
     @Get(":id") get(@Param("id") id: string) {
         return this.runs.get(id)
+    }
+
+    @Get(":id/event-history") eventHistory(@Param("id") id: string, @Query("after") after?: string,
+                                            @Query("limit") limit?: string) {
+        return this.runs.eventHistory(id, after, limit)
     }
 
     @Post(":id/cancel") cancel(@Param("id") id: string) {

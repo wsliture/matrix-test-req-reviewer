@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {isExpansionKey, runWarningDetails, toggleExpandedEvent} from "./runLogDetails";
+import {isExpansionKey, isTerminalRunStatus, mergeRunEvents, runWarningDetails, toggleExpandedEvent} from "./runLogDetails";
 
 describe("run log warning details", () => {
     it("normalizes warning values and a valid skipped count", () => {
@@ -25,5 +25,20 @@ describe("run log warning details", () => {
         expect(isExpansionKey("Enter")).toBe(true);
         expect(isExpansionKey(" ")).toBe(true);
         expect(isExpansionKey("Escape")).toBe(false)
+    })
+
+    it("merges paged history and live events without duplicates in numeric id order", () => {
+        const live = [{id: "101", value: "live"}, {id: "103", value: "live"}];
+        const history = [{id: "99", value: "history"}, {id: "101", value: "history"}, {id: "102", value: "history"}];
+        expect(mergeRunEvents(live, history)).toEqual([
+            {id: "99", value: "history"}, {id: "101", value: "history"},
+            {id: "102", value: "history"}, {id: "103", value: "live"}
+        ])
+    })
+
+    it("recognizes every terminal run status", () => {
+        expect(["SUCCEEDED", "FAILED", "CANCELLED"].every(isTerminalRunStatus)).toBe(true);
+        expect(isTerminalRunStatus("RUNNING")).toBe(false);
+        expect(isTerminalRunStatus("QUEUED")).toBe(false)
     })
 });
