@@ -119,6 +119,8 @@ export type CurrentActivity = {
 };
 
 export type DebugFile = {
+    editable: boolean;
+    deletable: boolean;
     path: string;
     size: number;
     modifiedAt: string;

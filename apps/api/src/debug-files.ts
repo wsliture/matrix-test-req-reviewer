@@ -108,9 +108,9 @@ export class DebugFilesService implements OnModuleDestroy {
 
     private async projectRoot(projectId: string) {
         const project = await this.projectInfo(projectId);
-        const root = path.resolve(project.workspacePath, ".matrix");
+        const root = path.resolve(project.workspacePath);
         await mkdir(root, {recursive: true});
-        if ((await lstat(root)).isSymbolicLink()) throw new BadRequestException(".matrix 根目录不能是符号链接");
+        if ((await lstat(root)).isSymbolicLink()) throw new BadRequestException("项目根目录不能是符号链接");
         return root
     }
 
@@ -130,8 +130,15 @@ export class DebugFilesService implements OnModuleDestroy {
         if (target === root || !target.startsWith(root + path.sep)) throw new BadRequestException("文件路径越界");
         let info;
         try {
+            // A symlink inside .matrix must not grant write access to source files.
+            let ancestor = root;
+            for (const segment of relative.split("/").slice(0, -1)) {
+                ancestor = path.join(ancestor, segment);
+                if ((await lstat(ancestor)).isSymbolicLink()) throw new BadRequestException("不允许访问符号链接");
+            }
             info = await lstat(target)
-        } catch {
+        } catch (error) {
+            if (error instanceof BadRequestException) throw error;
             throw new NotFoundException("文件不存在")
         }
         if (info.isSymbolicLink()) throw new BadRequestException("不允许访问符号链接");
@@ -163,13 +170,13 @@ export class DebugFilesService implements OnModuleDestroy {
 
     async tree(projectId: string) {
         const root = await this.projectRoot(projectId);
-        return {root: ".matrix", children: await this.nodes(root, root)}
+        return {root: "source", children: await this.nodes(root, root)}
     }
 
     async read(projectId: string, requestedPath: string | undefined) {
         const {relative, target, info} = await this.resolveFile(projectId, requestedPath), buffer = await readFile(target),
             extension = path.extname(relative).toLowerCase(), mimeType = IMAGE_TYPES[extension];
-        const common = {path: relative, size: buffer.length, modifiedAt: info.mtime.toISOString(), version: versionOf(buffer)};
+        const common = {editable: relative.startsWith(".matrix/") && isUtf8Text(buffer), deletable: relative.startsWith(".matrix/"), path: relative, size: buffer.length, modifiedAt: info.mtime.toISOString(), version: versionOf(buffer)};
         if (isUtf8Text(buffer)) return {...common, kind: "text" as const, content: buffer.toString("utf8")};
         if (mimeType) return {...common, kind: "image" as const, mimeType, contentBase64: buffer.toString("base64")};
         return {...common, kind: "binary" as const}
@@ -184,11 +191,11 @@ export class DebugFilesService implements OnModuleDestroy {
     async archiveSource(projectId: string) {
         const project = await this.projectInfo(projectId), root = await this.projectRoot(projectId),
             timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-        return {root, filename: `${safeArchiveName(project.name)}-.matrix-${timestamp}.zip`}
+        return {root, filename: `${safeArchiveName(project.name)}-source-${timestamp}.zip`}
     }
 
     async populateArchive(root: string, archive: Archiver) {
-        archive.append(Buffer.alloc(0), {name: ".matrix/"});
+        archive.append(Buffer.alloc(0), {name: "source/"});
         const visit = async (directory: string) => {
             const entries = await readdir(directory, {withFileTypes: true}).catch(error => {
                 if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -202,7 +209,7 @@ export class DebugFilesService implements OnModuleDestroy {
                     });
                 if (!info || info.isSymbolicLink()) continue;
                 if (info.isDirectory()) await visit(absolute);
-                else if (info.isFile()) archive.file(absolute, {name: `.matrix/${relative}`})
+                else if (info.isFile()) archive.file(absolute, {name: `source/${relative}`})
             }
         };
         await visit(root)
@@ -224,7 +231,9 @@ export class DebugFilesService implements OnModuleDestroy {
 
     async save(projectId: string, userId: string, body: {path?: string; content?: unknown; expectedVersion?: string; force?: boolean}) {
         if (typeof body.content !== "string") throw new BadRequestException("文件内容必须是文本");
-        const resolved = await this.resolveFile(projectId, body.path), current = await readFile(resolved.target);
+        const resolved = await this.resolveFile(projectId, body.path);
+        if (!resolved.relative.startsWith(".matrix/")) throw new ForbiddenException("源文件仅支持浏览和下载");
+        const current = await readFile(resolved.target);
         if (!isUtf8Text(current)) throw new BadRequestException("二进制文件不支持在线编辑");
         const currentVersion = versionOf(current);
         if (!body.force && body.expectedVersion !== currentVersion) throw new ConflictException({
@@ -246,8 +255,9 @@ export class DebugFilesService implements OnModuleDestroy {
     }
 
     async remove(projectId: string, userId: string, requestedPath: string | undefined, expectedVersion: string | undefined, force: boolean) {
-        const resolved = await this.resolveFile(projectId, requestedPath), current = await readFile(resolved.target),
-            currentVersion = versionOf(current);
+        const resolved = await this.resolveFile(projectId, requestedPath);
+        if (!resolved.relative.startsWith(".matrix/")) throw new ForbiddenException("源文件仅支持浏览和下载");
+        const current = await readFile(resolved.target), currentVersion = versionOf(current);
         if (!force && expectedVersion !== currentVersion) throw new ConflictException({
             message: "文件已被外部修改，请重新加载后再删除", currentVersion
         });

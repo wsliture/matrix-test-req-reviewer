@@ -52,10 +52,10 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
         [externalConflict, setExternalConflict] = useState(false), savingRef = useRef(false), dirtyRef = useRef(false),
         selectedRef = useRef<string | undefined>(undefined);
     const editorExtensions = useMemo(() => extensionsFor(selectedPath || ""), [selectedPath]);
-    const tree = useQuery({queryKey: ["debug-tree", projectId], queryFn: () => api<{root: string; children: DebugTreeNode[]}>(`/projects/${projectId}/debug-files/tree`)});
-    const file = useQuery({queryKey: ["debug-file", projectId, selectedPath], enabled: Boolean(selectedPath),
+    const tree = useQuery({queryKey: ["debug-project-tree", projectId], queryFn: () => api<{root: string; children: DebugTreeNode[]}>(`/projects/${projectId}/debug-files/tree`)});
+    const file = useQuery({queryKey: ["debug-project-file", projectId, selectedPath], enabled: Boolean(selectedPath),
         queryFn: () => api<DebugFile>(`/projects/${projectId}/debug-files/file?path=${queryPath(selectedPath!)}`), retry: false});
-    const dirty = file.data?.kind === "text" && draft !== (file.data.content || "");
+    const dirty = file.data?.editable === true && file.data?.kind === "text" && draft !== (file.data.content || "");
     useEffect(() => { dirtyRef.current = dirty; onDirtyChange(dirty) }, [dirty, onDirtyChange]);
     useEffect(() => { selectedRef.current = selectedPath }, [selectedPath]);
     useEffect(() => {
@@ -65,7 +65,7 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
 
     const reloadFile = useCallback(async () => {
         if (!selectedRef.current) return;
-        await qc.invalidateQueries({queryKey: ["debug-file", projectId, selectedRef.current]});
+        await qc.invalidateQueries({queryKey: ["debug-project-file", projectId, selectedRef.current]});
         setExternalConflict(false)
     }, [projectId, qc]);
 
@@ -73,7 +73,7 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
         const source = new EventSource(`/api/projects/${projectId}/debug-files/events`, {withCredentials: true});
         const changed = (raw: Event) => {
             const event = JSON.parse((raw as MessageEvent).data) as {path: string};
-            void qc.invalidateQueries({queryKey: ["debug-tree", projectId]});
+            void qc.invalidateQueries({queryKey: ["debug-project-tree", projectId]});
             if (event.path !== selectedRef.current || savingRef.current) return;
             if (dirtyRef.current) setExternalConflict(true); else void reloadFile()
         };
@@ -85,9 +85,9 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
     const save = useMutation<DebugFile, Error, boolean>({mutationFn: (force: boolean) => api<DebugFile>(`/projects/${projectId}/debug-files/file`, {
         method: "PUT", body: JSON.stringify({path: selectedPath, content: draft, expectedVersion: file.data?.version, force})
     }), onMutate: () => { savingRef.current = true }, onSuccess: result => {
-        qc.setQueryData(["debug-file", projectId, selectedPath], result);
+        qc.setQueryData(["debug-project-file", projectId, selectedPath], result);
         setDraft(result.content || ""); setExternalConflict(false);
-        void qc.invalidateQueries({queryKey: ["debug-tree", projectId]});
+        void qc.invalidateQueries({queryKey: ["debug-project-tree", projectId]});
         message.success("文件已保存")
     }, onError: error => {
         if (error instanceof ApiError && error.status === 409) setExternalConflict(true);
@@ -95,9 +95,9 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
     }, onSettled: () => { savingRef.current = false }});
     const remove = useMutation({mutationFn: () => api<{path: string}>(`/projects/${projectId}/debug-files/file?path=${queryPath(selectedPath!)}&expectedVersion=${queryPath(file.data!.version)}`, {method: "DELETE"}),
         onSuccess: () => {
-            qc.removeQueries({queryKey: ["debug-file", projectId, selectedPath]});
+            qc.removeQueries({queryKey: ["debug-project-file", projectId, selectedPath]});
             setSelectedPath(undefined); setDraft(""); setExternalConflict(false);
-            void qc.invalidateQueries({queryKey: ["debug-tree", projectId]});
+            void qc.invalidateQueries({queryKey: ["debug-project-tree", projectId]});
             message.success("文件已删除")
         }, onError: error => {
             if (error instanceof ApiError && error.status === 409) setExternalConflict(true);
@@ -126,39 +126,39 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
             running ? "分析任务正在运行，ZIP 是实时磁盘快照，打包期间产物仍可能变化。" : ""].filter(Boolean);
         const proceed = () => startDownload(`/api/projects/${projectId}/debug-files/archive`);
         if (!warnings.length) return proceed();
-        Modal.confirm({title: "下载整个 .matrix？", content: warnings.join(" "), okText: "继续下载", cancelText: "取消", onOk: proceed})
+        Modal.confirm({title: "下载整个项目目录？", content: warnings.join(" "), okText: "继续下载", cancelText: "取消", onOk: proceed})
     };
     const structured = selectedPath?.toLowerCase().endsWith(".json") || selectedPath?.toLowerCase().endsWith(".jsonc");
     const info = file.data;
 
     return <section className="debug-files-panel">
-        <div className="debug-files-header"><div><Typography.Title level={4}>.matrix 调试器</Typography.Title>
-            <Typography.Text type="secondary">文件变化将实时同步</Typography.Text></div>
-            <Space wrap><Button icon={<DownloadOutlined/>} onClick={downloadArchive}>下载整个 .matrix</Button>
-                <Button icon={<ReloadOutlined/>} onClick={() => { void qc.invalidateQueries({queryKey: ["debug-tree", projectId]}) }}>刷新</Button></Space></div>
+        <div className="debug-files-header"><div><Typography.Title level={4}>项目文件调试器</Typography.Title>
+            <Typography.Text type="secondary">文件变化将实时同步；源文件仅支持浏览和下载</Typography.Text></div>
+            <Space wrap><Button icon={<DownloadOutlined/>} onClick={downloadArchive}>下载整个项目目录</Button>
+                <Button icon={<ReloadOutlined/>} onClick={() => { void qc.invalidateQueries({queryKey: ["debug-project-tree", projectId]}) }}>刷新</Button></Space></div>
         <Alert type="warning" showIcon message="直接修改磁盘产物不会自动刷新评审索引，必要时请重新运行相应流程。"/>
         {running && <Alert type="error" showIcon message="分析任务正在运行"
             description="保存或删除可能与 Agent 同时写入文件；系统会检测版本冲突，但操作仍可能影响当前流程。"/>}
         <div className="debug-files-body">
             <div className="debug-files-tree">{tree.isLoading ? <Spin/> : tree.error ? <Alert type="error" message={tree.error.message}/> :
                 tree.data?.children.length ? <Tree showLine blockNode treeData={treeData(tree.data.children)} selectedKeys={selectedPath ? [selectedPath] : []}
-                    onSelect={keys => keys[0] && choose(String(keys[0]))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description=".matrix 目录为空"/>}</div>
+                    onSelect={keys => keys[0] && choose(String(keys[0]))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="项目目录为空"/>}</div>
             <div className="debug-file-editor">{!selectedPath ? <Empty description="请选择文件"/> : file.isLoading ? <Spin/> : file.error ? <Alert type="error" message={file.error.message}/> : info && <>
                 <div className="debug-file-toolbar"><div className="debug-file-title"><Typography.Text strong title={info.path}>{info.path}</Typography.Text>
                     <Space size={4}><Tag>{readableSize(info.size)}</Tag><Tag>{new Date(info.modifiedAt).toLocaleString()}</Tag>{dirty && <Tag color="orange">未保存</Tag>}</Space></div>
-                    <Space wrap>{structured && info.kind === "text" && <Button loading={formatter.isPending} onClick={() => formatter.mutate()}>格式化 JSON</Button>}
+                    <Space wrap>{structured && info.editable && info.kind === "text" && <Button loading={formatter.isPending} onClick={() => formatter.mutate()}>格式化 JSON</Button>}
                         <Button icon={<DownloadOutlined/>} onClick={downloadCurrent}>下载</Button>
-                        {info.kind === "text" && <Button type="primary" icon={<SaveOutlined/>} disabled={!dirty || externalConflict} loading={save.isPending} onClick={() => save.mutate(false)}>保存</Button>}
-                        <Popconfirm title="删除文件？" description={<>将永久删除 <b>{info.path}</b>，此操作不可恢复。</>}
+                        {info.editable && info.kind === "text" && <Button type="primary" icon={<SaveOutlined/>} disabled={!dirty || externalConflict} loading={save.isPending} onClick={() => save.mutate(false)}>保存</Button>}
+                        {info.deletable && <Popconfirm title="删除文件？" description={<>将永久删除 <b>{info.path}</b>，此操作不可恢复。</>}
                             okText="删除" cancelText="取消" okButtonProps={{danger: true}} onConfirm={() => remove.mutate()}>
-                            <Button danger icon={<DeleteOutlined/>} loading={remove.isPending}>删除</Button></Popconfirm></Space></div>
+                            <Button danger icon={<DeleteOutlined/>} loading={remove.isPending}>删除</Button></Popconfirm>}</Space></div>
                 {externalConflict && <Alert type="error" showIcon message="文件已被外部修改"
                     description="当前草稿未被覆盖。请选择重新加载磁盘版本，或确认强制覆盖。"
                     action={<Space><Button onClick={() => reloadFile()}>放弃草稿并重新加载</Button><Button danger onClick={forceSave}>强制覆盖</Button></Space>}/>}
-                {info.kind === "text" ? <CodeMirror className="matrix-code-editor" value={draft} height="100%" extensions={editorExtensions}
+                {info.kind === "text" ? <CodeMirror className="matrix-code-editor" value={draft} readOnly={!info.editable} editable={info.editable} height="100%" extensions={editorExtensions}
                     onChange={setDraft} basicSetup={DEBUG_EDITOR_BASIC_SETUP}/> :
                     info.kind === "image" ? <div className="debug-image-preview"><img alt={info.path} src={`data:${info.mimeType};base64,${info.contentBase64}`}/></div> :
-                        <Empty description="该二进制文件不支持在线查看或编辑"/>}
+                        <Empty description="不支持在线预览，请下载查看"/>}
             </>}</div>
         </div>
     </section>
