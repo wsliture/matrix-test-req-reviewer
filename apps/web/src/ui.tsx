@@ -1281,7 +1281,7 @@ function Review() {
                         cancelDirectoryClose(kind === "source" ? sourceCloseTimer : requirementCloseTimer);
                         setOpen(!open)
                     }}>
-                <MenuUnfoldOutlined/><span>{label}</span>
+                <MenuUnfoldOutlined/><span className="directory-hover-rail-label">目录</span>
             </button>
             <div className={`directory-overlay directory-overlay-${kind}${open ? " is-open" : ""}`}
                  onMouseEnter={() => hoverDirectory(kind, true)} onMouseLeave={() => hoverDirectory(kind, false)}>

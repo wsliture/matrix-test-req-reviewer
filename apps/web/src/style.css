@@ -2315,6 +2315,8 @@ html, body, #root {
 }
 
 .directory-hover-rail {
+    flex-direction: column;
+    gap: 4px;
     position: absolute;
     z-index: 20;
     top: 88px;
@@ -2339,8 +2341,11 @@ html, body, #root {
     background: #e6f4ff
 }
 
-.directory-hover-rail span:last-child {
-    display: none
+.directory-hover-rail-label {
+    font-size: 12px;
+    line-height: 1;
+    writing-mode: vertical-rl;
+    text-orientation: upright
 }
 
 .directory-overlay {
