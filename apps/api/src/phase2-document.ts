@@ -1,4 +1,4 @@
-import {readFile} from "node:fs/promises";
+import {readFile, readdir} from "node:fs/promises";
 import path from "node:path";
 
 type Json = Record<string, any>;
@@ -16,6 +16,8 @@ export type Phase2Block = {
     type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "reference_list" | "error";
     text?: string;
     level?: number;
+    openQuestions?: string[];
+    openQuestionGroups?: {title: string; questions: string[]}[];
     anchorId?: string;
     evaluable?: boolean;
     businessId?: string;
@@ -87,6 +89,44 @@ const FILES = [
 const text = (value: unknown) => typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 const list = (value: unknown) => Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 const flowList = (value: unknown) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
+const uniqueText = (values: unknown[]) => [...new Set(values.map(text).filter(Boolean))];
+
+type RawQuestions = {file: string; data: Json; questions: string[]};
+
+function questionsFromRaw(data: Json): string[] {
+    const plural = Array.isArray(data.open_questions) ? data.open_questions : [];
+    const singular = Array.isArray(data.open_question) ? data.open_question : data.open_question == null ? [] : [data.open_question];
+    return uniqueText([...plural, ...singular])
+}
+
+async function readRawQuestions(file: string, warnings: string[]): Promise<RawQuestions | undefined> {
+    try {
+        const data = JSON.parse(await readFile(file, "utf8"));
+        return {file, data, questions: questionsFromRaw(data)}
+    } catch (error: any) {
+        if (error?.code !== "ENOENT") warnings.push(`无法读取待确认问题文件 ${path.basename(file)}：${error instanceof Error ? error.message : String(error)}`);
+        return undefined
+    }
+}
+
+async function readRawQuestionDirectory(directory: string, warnings: string[]): Promise<RawQuestions[]> {
+    try {
+        const names = (await readdir(directory)).filter(name => name.endsWith(".raw.json")).sort();
+        return (await Promise.all(names.map(name => readRawQuestions(path.join(directory, name), warnings))))
+            .filter((item): item is RawQuestions => Boolean(item))
+    } catch (error: any) {
+        if (error?.code !== "ENOENT") warnings.push(`无法读取待确认问题目录 ${path.basename(directory)}：${error instanceof Error ? error.message : String(error)}`);
+        return []
+    }
+}
+
+function appendOpenQuestions(block: Phase2Block | undefined, questions: string[]) {
+    if (!block || !questions.length) return;
+    block.openQuestions = uniqueText([...(block.openQuestions || []), ...questions])
+}
+
+const headingWithNumber = (blocks: Phase2Block[], number: string) => blocks.find(block => block.type === "heading" && text(block.text).startsWith(`${number} `));
+const firstHeading = (blocks: Phase2Block[]) => blocks.find(block => block.type === "heading");
 
 export function formatFunctionalFlowItems(value: unknown): string[] {
     const items = flowList(value).map(item => item.replace(/[。；]+$/u, "").trimEnd()).filter(Boolean);
@@ -530,6 +570,89 @@ function nonFunctional(data: Json, artifact: string, number: string, title: stri
     return blocks
 }
 
+const SINGLE_RAW_BY_CHAPTER: Record<string, string> = {
+    "4.2": "performance.raw.json",
+    "4.4": "reliability-safety.raw.json",
+    "4.5": "margin.raw.json",
+    "4.6": "boundary.raw.json",
+    "4.7": "data-processing.raw.json",
+    "4.8": "recovery.raw.json",
+    "4.9": "strength.raw.json"
+};
+
+async function attachRawOpenQuestions(dataDir: string, number: string, data: Json, blocks: Phase2Block[], warnings: string[]) {
+    if (number === "3.1") {
+        const raws = await readRawQuestionDirectory(path.join(dataDir, "hardware-interface-blocks"), warnings);
+        const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+        for (const raw of raws) {
+            if (!raw.questions.length) continue;
+            const candidate = raw.data.interface || raw.data;
+            const identities = [candidate.interface_id, candidate.candidate_id].map(text).filter(Boolean);
+            const names = [candidate.title, candidate.interface_name, candidate.name].map(text).filter(Boolean);
+            const index = interfaces.findIndex((item: Json) => identities.some(value => [text(item.interface_id), text(item.candidate_id)].includes(value))
+                || names.some(value => [text(item.title), text(item.interface_name), text(item.name)].includes(value)));
+            if (index < 0) warnings.push(`无法将 ${path.basename(raw.file)} 的待确认问题匹配到3.1子章节`);
+            else appendOpenQuestions(headingWithNumber(blocks, `3.1.${index + 1}`), raw.questions)
+        }
+        return
+    }
+    if (number === "4.1") {
+        const init = await readRawQuestions(path.join(dataDir, "functional-init-content.raw.json"), warnings);
+        const leaves = await readRawQuestionDirectory(path.join(dataDir, "functional-other-content-leaves"), warnings);
+        for (const raw of [init, ...leaves].filter((item): item is RawQuestions => Boolean(item))) {
+            if (!raw.questions.length) continue;
+            const items = Array.isArray(raw.data.items) ? raw.data.items : [];
+            const numbers = uniqueText([...items.map((item: Json) => item.title_no), raw.data.section_title_no])
+                .filter(value => value !== "4.1").sort((left, right) => right.length - left.length);
+            let target = numbers.map(value => headingWithNumber(blocks, value)).find(Boolean);
+            if (!target) {
+                const sourceRefs = uniqueText(items.flatMap((item: Json) => [item.source_ref, ...(Array.isArray(item.source_refs) ? item.source_refs : [])]));
+                target = blocks.find(block => block.type === "heading" && block.sourceRefs?.some(value => sourceRefs.includes(value)))
+            }
+            if (!target) {
+                const titles = uniqueText(items.map((item: Json) => item.title));
+                target = blocks.find(block => block.type === "heading" && titles.some(value => text(block.text).endsWith(` ${value}`)))
+            }
+            if (!target) warnings.push(`无法将 ${path.basename(raw.file)} 的待确认问题匹配到4.1子章节`);
+            else appendOpenQuestions(target, raw.questions)
+        }
+        return
+    }
+    if (number === "4.3") {
+        const raws = await readRawQuestionDirectory(path.join(dataDir, "interface-test-content-batches"), warnings);
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const finalOrder = uniqueText(rows.map((row: Json) => row.interface_id));
+        const finalNames = new Map<string, string>();
+        for (const row of rows) {
+            const interfaceId = text(row.interface_id);
+            if (interfaceId && !finalNames.has(interfaceId)) finalNames.set(interfaceId, text(row.interface_name) || interfaceId)
+        }
+        const grouped = new Map<string, {title: string; questions: string[]}>();
+        for (const raw of raws) {
+            if (!raw.questions.length) continue;
+            const interfaceId = text(raw.data.interface_id || raw.data.batch_id);
+            if (!interfaceId) {
+                warnings.push(`无法取得 ${path.basename(raw.file)} 的接口身份，待确认问题未展示`);
+                continue
+            }
+            const interfaceName = text(raw.data.interface_name) || finalNames.get(interfaceId) || interfaceId;
+            const current = grouped.get(interfaceId);
+            grouped.set(interfaceId, {
+                title: interfaceName === interfaceId ? interfaceId : `${interfaceName}（${interfaceId}）`,
+                questions: uniqueText([...(current?.questions || []), ...raw.questions])
+            })
+        }
+        const order = [...finalOrder.filter(interfaceId => grouped.has(interfaceId)), ...[...grouped.keys()].filter(interfaceId => !finalOrder.includes(interfaceId))];
+        const target = headingWithNumber(blocks, "4.3");
+        if (target) target.openQuestionGroups = order.map(interfaceId => grouped.get(interfaceId)!).filter(group => group.questions.length)
+        return
+    }
+    const rawName = SINGLE_RAW_BY_CHAPTER[number];
+    if (!rawName) return;
+    const raw = await readRawQuestions(path.join(dataDir, rawName), warnings);
+    if (raw) appendOpenQuestions(firstHeading(blocks), raw.questions)
+}
+
 function traceability(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const root = lookup.root(artifact), rows = data.rows || [],
         requirementCount = data.summary?.requirement_count ?? [...new Set(rows.flatMap((item: Json) => item.test_requirement_ids || []))].length;
@@ -552,6 +675,7 @@ export async function buildPhase2DocumentFromDataDir(dataDir: string, requiremen
             } else if (number === "4.1") blocks = functional(data, artifact, lookup, warnings);
             else if (number === "6") blocks = traceability(data, artifact, lookup);
             else blocks = nonFunctional(data, artifact, number, title, lookup);
+            await attachRawOpenQuestions(dataDir, number, data, blocks, warnings);
             chapters.push({artifact, number, title, rootNodeId: lookup.root(artifact)?.id, blocks,
                 ...(warnings.length ? {warnings: [...new Set(warnings)], skippedCount: warnings.filter(item => item.startsWith("跳过")).length} : {})})
         } catch (error: any) {

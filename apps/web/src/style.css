@@ -934,6 +934,12 @@ html, body, #root {
     margin-top: 5px
 }
 
+.phase2-warning-tooltip-section + .phase2-warning-tooltip-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, .22)
+}
+
 .phase2-warning-tooltip-content ul {
     margin: 8px 0 0;
     padding-left: 20px
@@ -941,6 +947,14 @@ html, body, #root {
 
 .phase2-warning-tooltip-content li + li {
     margin-top: 6px
+}
+
+.phase2-open-question-group {
+    margin-top: 8px
+}
+
+.phase2-open-question-group ul {
+    margin-top: 4px
 }
 
 .phase2-heading-line h1, .phase2-heading-line h2, .phase2-heading-line h3, .phase2-heading-line h4, .phase2-heading-line h5 {

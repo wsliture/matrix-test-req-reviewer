@@ -172,6 +172,8 @@ export type Phase2Block = {
     type: "heading" | "paragraph" | "list" | "table" | "table_selector" | "requirement_actions" | "reference_list" | "error";
     text?: string;
     level?: number;
+    openQuestions?: string[];
+    openQuestionGroups?: {title: string; questions: string[]}[];
     anchorId?: string;
     evaluable?: boolean;
     businessId?: string;

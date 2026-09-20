@@ -244,6 +244,79 @@ describe("hardware interface anchors", () => {
     });
 });
 
+describe("raw open question placement", () => {
+    it("attaches child raw questions to 3.1, 4.1, and 4.3 child headings", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-open-questions-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(path.join(dataDir, "hardware-interface-blocks"), {recursive: true});
+        await mkdir(path.join(dataDir, "functional-other-content-leaves"), {recursive: true});
+        await mkdir(path.join(dataDir, "interface-test-content-batches"), {recursive: true});
+        await writeFile(path.join(dataDir, "hardware-interface-model.json"), JSON.stringify({
+            interfaces: [{candidate_id: "CAN-1", interface_id: "IF-CAN-001", title: "CAN接口", overview_tables: [], input_tables: [], output_tables: []}]
+        }));
+        await writeFile(path.join(dataDir, "hardware-interface-blocks", "can.raw.json"), JSON.stringify({
+            interface: {candidate_id: "CAN-1", interface_id: "IF-CAN-001", title: "CAN接口"},
+            open_questions: ["确认CAN波特率", "确认CAN波特率", " "]
+        }));
+        await writeFile(path.join(dataDir, "hardware-interface-blocks", "broken.raw.json"), "{");
+        await writeFile(path.join(dataDir, "functional-test-content.json"), JSON.stringify({
+            children: [{title_no: "4.1.1", title: "初始化功能", init_content: {
+                summary: "初始化", input_flow: [], processing: [], output_flow: [], tables: []
+            }}, {title_no: "4.1.2", title: "遥测功能", other_content: {
+                summary: "遥测", input_flow: [], processing: [], output_flow: [], tables: []
+            }}]
+        }));
+        await writeFile(path.join(dataDir, "functional-init-content.raw.json"), JSON.stringify({
+            section_title_no: "4.1.1", items: [{title_no: "4.1.1", title: "初始化功能"}], open_question: "确认初始化时序"
+        }));
+        await writeFile(path.join(dataDir, "functional-other-content-leaves", "telemetry.raw.json"), JSON.stringify({
+            section_title_no: "4.1", items: [{title_no: "4.1.2", title: "遥测功能"}], open_questions: ["确认遥测周期"]
+        }));
+        await writeFile(path.join(dataDir, "interface-test-content.json"), JSON.stringify({
+            rows: [
+                {interface_id: "IF-CAN-001", interface_name: "CAN接口", interface_requirement_description: "CAN需求", test_requirement_id: "TR-JK-001", related_description: "接口正常情况的测试"},
+                {interface_id: "IF-RS422-001", interface_name: "RS422接口", interface_requirement_description: "串口需求", test_requirement_id: "TR-JK-002", related_description: "接口正常情况的测试"}
+            ], test_requirements: {sufficiency: "C1、C2", termination: "Z1、Z2", priority: "高优先级"}
+        }));
+        await writeFile(path.join(dataDir, "interface-test-content-batches", "can.raw.json"), JSON.stringify({
+            batch_id: "IF-CAN-001", interface_id: "IF-CAN-001", interface_name: "CAN接口", open_questions: ["确认异常帧响应"]
+        }));
+        await writeFile(path.join(dataDir, "interface-test-content-batches", "can-extra.raw.json"), JSON.stringify({
+            batch_id: "IF-CAN-001", interface_id: "IF-CAN-001", interface_name: "CAN接口", open_questions: ["确认异常帧响应", "确认总线关闭恢复"]
+        }));
+        await writeFile(path.join(dataDir, "interface-test-content-batches", "rs422.raw.json"), JSON.stringify({
+            batch_id: "IF-RS422-001", interface_id: "IF-RS422-001", interface_name: "RS422接口", open_questions: ["确认串口校验位"]
+        }));
+
+        const document = await buildPhase2Document(workspace, []);
+        const heading = (chapter: string, value: string) => document.chapters.find(item => item.number === chapter)?.blocks
+            .find(block => block.type === "heading" && block.text?.startsWith(value));
+        expect(heading("3.1", "3.1.1 ")?.openQuestions).toEqual(["确认CAN波特率"]);
+        expect(document.chapters.find(item => item.number === "3.1")?.warnings?.some(value => value.includes("broken.raw.json"))).toBe(true);
+        expect(heading("4.1", "4.1.1 ")?.openQuestions).toEqual(["确认初始化时序"]);
+        expect(heading("4.1", "4.1.2 ")?.openQuestions).toEqual(["确认遥测周期"]);
+        expect(heading("4.3", "4.3 ")?.openQuestionGroups).toEqual([
+            {title: "CAN接口（IF-CAN-001）", questions: ["确认异常帧响应", "确认总线关闭恢复"]},
+            {title: "RS422接口（IF-RS422-001）", questions: ["确认串口校验位"]}
+        ]);
+        expect(document.chapters.find(item => item.number === "4.3")?.blocks.some(block => block.type === "heading" && block.text?.startsWith("4.3.1.1 "))).toBe(false)
+    });
+
+    it("attaches a single raw artifact to its chapter heading", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-single-open-question-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        await writeFile(path.join(dataDir, "performance-test-content.json"), JSON.stringify({
+            rows: [], test_requirements: {sufficiency: "C1、C2", termination: "Z1、Z2", priority: "低优先级"}
+        }));
+        await writeFile(path.join(dataDir, "performance.raw.json"), JSON.stringify({open_questions: ["确认性能阈值"]}));
+
+        const document = await buildPhase2Document(workspace, []);
+        const performance = document.chapters.find(item => item.number === "4.2");
+        expect(performance?.blocks.find(block => block.type === "heading")?.openQuestions).toEqual(["确认性能阈值"])
+    })
+});
+
 describe("non-functional requirement editor contracts", () => {
     it("provides controlled performance related-description options", async () => {
         const workspace = await mkdtemp(path.join(tmpdir(), "phase2-performance-options-"));

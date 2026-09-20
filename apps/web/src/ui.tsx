@@ -89,6 +89,7 @@ import {appendEditTimeOutbox, EditingTimeTracker, editTimeOutboxKey, formatEditD
 import {DocxPreview} from "./DocxPreview";
 import {cacheHitRate, elapsedMilliseconds, formatElapsed, formatTokenCount, nonCachedTokens} from "./runMetrics";
 import {Phase2DocumentRenderer} from "./Phase2DocumentRenderer";
+import {requirementScrollTop} from "./requirementNavigation";
 import {useTraceStore} from "./traceStore";
 import {DebugFilesPanel} from "./DebugFilesPanel";
 import {activityPresentation, phase2RunButtonLabel, PROJECT_STATUS, projectsNeedPolling, reviewSummaryText, stageName} from "./projectPresentation";
@@ -727,6 +728,8 @@ function Review() {
         });
     const [tracePopoverNodeId, setTracePopoverNodeId] = useState<string>();
     const [sourceNavigationKey, setSourceNavigationKey] = useState(0);
+    const [requirementNavigation, setRequirementNavigation] = useState<{targetId: string; key: number}>();
+    const requirementDocumentRef = useRef<HTMLElement>(null);
     const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
     const [requirementsDownloadUnavailable, setRequirementsDownloadUnavailable] = useState(false);
     const [reviewFilter, setReviewFilter] = useState<"all" | "reviewed" | "pending">("all");
@@ -1051,10 +1054,7 @@ function Review() {
             setSourceDirectoryOpen(false);
             setRequirementDirectoryOpen(false);
             setRequirement(targetId);
-            setTimeout(() => window.document.getElementById(`requirement-${targetId}`)?.scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-            }), 0)
+            setRequirementNavigation(current => ({targetId, key: (current?.key || 0) + 1}))
         },
         gotoSource = (link: TraceLink) => {
             setRequirementDirectoryOpen(false);
@@ -1082,6 +1082,49 @@ function Review() {
             setEvalOpen(true);
             return true
         };
+    useLayoutEffect(() => {
+        if (!requirementNavigation) return;
+        const pane = requirementDocumentRef.current;
+        if (!pane) return;
+        let firstFrame = 0, secondFrame = 0, stopTimer: ReturnType<typeof setTimeout> | undefined;
+        let resizeObserver: ResizeObserver | undefined;
+        const target = () => {
+            const element = pane.ownerDocument.getElementById(`requirement-${requirementNavigation.targetId}`);
+            return element instanceof HTMLElement && pane.contains(element) ? element : undefined
+        };
+        const scroll = (behavior: ScrollBehavior) => {
+            const element = target();
+            if (!element) return false;
+            pane.scrollTo({
+                top: requirementScrollTop({
+                    currentScrollTop: pane.scrollTop,
+                    containerTop: pane.getBoundingClientRect().top,
+                    targetTop: element.getBoundingClientRect().top,
+                    scrollHeight: pane.scrollHeight,
+                    clientHeight: pane.clientHeight
+                }),
+                behavior
+            });
+            return true
+        };
+        firstFrame = requestAnimationFrame(() => {
+            secondFrame = requestAnimationFrame(() => {
+                if (!scroll("smooth")) return;
+                const documentRoot = pane.querySelector<HTMLElement>(".phase2-document");
+                if (documentRoot && typeof ResizeObserver !== "undefined") {
+                    resizeObserver = new ResizeObserver(() => scroll("auto"));
+                    resizeObserver.observe(documentRoot)
+                }
+                stopTimer = setTimeout(() => resizeObserver?.disconnect(), 800)
+            })
+        });
+        return () => {
+            cancelAnimationFrame(firstFrame);
+            cancelAnimationFrame(secondFrame);
+            if (stopTimer) clearTimeout(stopTimer);
+            resizeObserver?.disconnect()
+        }
+    }, [requirementNavigation, data.data?.phase2Document?.chapters]);
     useEffect(() => {
         const chapter = searchParams.get("chapter")?.trim();
         if (!chapter || locatedChapter.current === chapter) return;
@@ -1187,7 +1230,7 @@ function Review() {
                                                        defaultExpandAll
                                                        onSelect={keys => gotoRequirement(String(keys[0] || ""))}/>{generationTail}
     </aside>;
-    const requirementDocument = <main className="document requirement-pane review-document-pane"
+    const requirementDocument = <main ref={requirementDocumentRef} className="document requirement-pane review-document-pane"
         onChangeCapture={documentEditing ? recordEditActivity : undefined}
         onBlurCapture={documentEditing ? stopEditActivity : undefined}><Phase2DocumentRenderer
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}

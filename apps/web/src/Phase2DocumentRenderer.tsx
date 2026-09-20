@@ -441,11 +441,17 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
             <div className="phase2-heading-line"><div className="phase2-heading-title">
                 {createElement(headingName, null, renderParts(block.parts, block.text, {editing, drafts, onDraft, annotation}))}
                 {chapterWarning && <Tooltip overlayClassName="phase2-warning-tooltip" title={<div className="phase2-warning-tooltip-content">
-                    <strong>本章已容错完成</strong>
-                    <div>跳过操作数：{chapterWarning.skippedCount}</div>
-                    <ul>{chapterWarning.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul>
+                    {chapterWarning.warnings.length > 0 && <div className="phase2-warning-tooltip-section"><strong>本章已容错完成</strong>
+                        <div>跳过操作数：{chapterWarning.skippedCount}</div>
+                        <ul>{chapterWarning.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div>}
+                    {(chapterWarning.openQuestions.length > 0 || chapterWarning.openQuestionGroups.length > 0) && <div className="phase2-warning-tooltip-section"><strong>待确认问题</strong>
+                        {chapterWarning.openQuestions.length > 0 && <ul>{chapterWarning.openQuestions.map((question, index) => <li key={`${question}-${index}`}>{question}</li>)}</ul>}
+                        {chapterWarning.openQuestionGroups.map(group => <div className="phase2-open-question-group" key={group.title}>
+                            <b>{group.title}</b>
+                            <ul>{group.questions.map((question, index) => <li key={`${question}-${index}`}>{question}</li>)}</ul>
+                        </div>)}</div>}
                 </div>}>
-                    <span className="phase2-warning-help" tabIndex={0} role="img" aria-label="查看本章容错警告"><QuestionCircleOutlined/></span>
+                    <span className="phase2-warning-help" tabIndex={0} role="img" aria-label="查看警告和待确认问题"><QuestionCircleOutlined/></span>
                 </Tooltip>}
             </div>
                 <div className="phase2-heading-actions">{mode === "review" && block.evaluable && block.anchorId &&
