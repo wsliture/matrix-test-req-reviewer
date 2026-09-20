@@ -150,6 +150,48 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
 });
 
 describe("hardware interface anchors", () => {
+    it("numbers hardware tables in DOCX order and resets the sequence for each interface", async () => {
+        const workspace = await mkdtemp(path.join(tmpdir(), "phase2-hardware-tables-"));
+        const dataDir = path.join(workspace, ".matrix", "data");
+        await mkdir(dataDir, {recursive: true});
+        const sourceTable = (table_id: string, title: string) => ({table_id, title, columns: ["字段"], rows: [["值"]]});
+        await writeFile(path.join(dataDir, "hardware-interface-model.json"), JSON.stringify({
+            chapter_title: "数据及接口需求",
+            section_title: "硬件接口",
+            interfaces: [{
+                title: "CAN总线接口及相关数据流",
+                overview_tables: [sourceTable("T-OVERVIEW", "表 5.2-1 CAN地址分配表")],
+                input_tables: [sourceTable("T-INPUT", "CAN输入数据表")],
+                output_tables: [sourceTable("T-INPUT", "CAN输入数据表")],
+                topics: [{
+                    title: "遥测轮询",
+                    input_tables: [],
+                    output_tables: [sourceTable("T-TOPIC", "遥测轮询输出数据表")]
+                }]
+            }, {
+                title: "串口接口及相关数据流",
+                overview_tables: [],
+                input_tables: [sourceTable("T-SERIAL", "串口输入数据表")],
+                output_tables: [],
+                topics: []
+            }]
+        }));
+
+        const document = await buildPhase2Document(workspace, []);
+        const hardware = document.chapters.find(chapter => chapter.number === "3.1");
+        const captions = hardware?.blocks.filter(block => block.type === "table").map(block => block.caption);
+        expect(captions).toEqual([
+            "表3.1.1-1  CAN地址分配表",
+            "表3.1.1-2  CAN输入数据表",
+            "表3.1.1-3  遥测轮询输出数据表",
+            "表3.1.2-1  串口输入数据表"
+        ]);
+        expect(hardware?.blocks).toContainEqual(expect.objectContaining({
+            type: "paragraph",
+            text: "该表已在前文展示：表3.1.1-2。"
+        }))
+    });
+
     it("binds scalar hardware input and output flows to the whole raw field", async () => {
         const workspace = await mkdtemp(path.join(tmpdir(), "phase2-hardware-flow-"));
         const dataDir = path.join(workspace, ".matrix", "data");

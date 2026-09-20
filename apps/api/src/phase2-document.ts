@@ -316,10 +316,11 @@ async function hydrateHardwareTables(data: Json): Promise<string[]> {
 function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>): Phase2Block[] {
     const root = lookup.root(artifact),
         blocks: Phase2Block[] = [heading(`3 ${text(data.chapter_title) || "数据及接口需求"}`, 1), heading(`3.1 ${text(data.section_title) || "硬件接口"}`, 2, root?.id, refs(data), root?.businessId, true)];
-    const renderedTables = new Set<string>();
     (data.interfaces || []).forEach((item: Json, index: number) => {
         const number = `3.1.${index + 1}`, node = lookup.anchor(artifact, number),
             title = text(item.title || item.interface_name || item.name) || `硬件接口${index + 1}`;
+        const renderedTables = new Map<string, string>();
+        let tableSequence = 1;
         const extra = {identity: {interface_id: item.interface_id, candidate_id: item.candidate_id}};
         const itemBinding = (field: string, value: unknown, kind?: Phase2EditBinding["kind"]) => binding(artifact, node?.id, field, value, extra, kind);
         const interfaceHeading = heading(`${number} ${title}`, 3, node?.id, refs(item), node?.businessId);
@@ -337,18 +338,19 @@ function hardware(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
             for (const candidate of tables || []) {
                 if (candidate.__unavailable) continue;
                 const sharedKey = text(candidate.table_id) || text(candidate.table_asset?.path);
-                if (sharedKey && renderedTables.has(sharedKey)) {
-                    blocks.push(paragraph(`该表已在前文展示：${text(candidate.table_no) || cleanTableTitle(candidate.title) || fallback}。`));
+                const previousNumber = sharedKey ? renderedTables.get(sharedKey) : undefined;
+                if (previousNumber) {
+                    blocks.push(paragraph(`该表已在前文展示：${previousNumber}。`));
                     continue
                 }
                 const value = normalizedTable(candidate, fallback);
                 if (value) {
-                    const finalNumber = text(candidate.table_no);
-                    value.caption = `${finalNumber ? `${finalNumber}  ` : ""}${cleanTableTitle(value.caption) || fallback}`;
+                    const finalNumber = `表${number}-${tableSequence++}`;
+                    value.caption = `${finalNumber}  ${cleanTableTitle(value.caption) || fallback}`;
                     value.selectionEditKey = selectionBinding?.edit_key;
                     value.sourceTableId = text(candidate.table_id);
                     blocks.push(value);
-                    if (sharedKey) renderedTables.add(sharedKey)
+                    if (sharedKey) renderedTables.set(sharedKey, finalNumber)
                 }
             }
         };
