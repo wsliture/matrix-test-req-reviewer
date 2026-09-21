@@ -76,7 +76,18 @@ type ToolOutputMetadata = {truncated?: unknown; outputPath?: unknown} | undefine
 
 export function parseToolOutput(value: string, metadata?: ToolOutputMetadata) {
     try {
-        return JSON.parse(value) as { ok?: boolean; mode?: string; error?: string; summary?: unknown; output?: unknown; warnings?: string[]; skipped_count?: number }
+        return JSON.parse(value) as {
+            ok?: boolean;
+            mode?: string;
+            error?: string;
+            error_code?: string;
+            retryable?: boolean;
+            failed_candidate_id?: string;
+            summary?: unknown;
+            output?: unknown;
+            warnings?: unknown[];
+            skipped_count?: number
+        }
     } catch (error) {
         const outputPath = typeof metadata?.outputPath === "string" ? metadata.outputPath : undefined;
         const truncated = metadata?.truncated === true || value.includes("The tool call succeeded but the output was truncated");

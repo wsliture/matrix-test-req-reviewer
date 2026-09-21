@@ -6,12 +6,14 @@ import {Redis} from "ioredis";
 import {Pool} from "pg";
 import {createOpencodeClient, type Event, type ToolPart} from "@opencode-ai/sdk/v2";
 import {access, readFile, stat} from "node:fs/promises";
+import {createHash} from "node:crypto";
 import path from "node:path";
 import {missingCompletionStages, parseToolOutput, progressOf, workerBatchIndex} from "./progress.js";
 import {indexAvailableRequirements, indexProject} from "./indexing.js";
 import {restorePhase2Edit, restorePublishedPhase2Edit, startPhase2EditWorker} from "./phase2-edit.js";
 import {createRequirementRevision, removeRequirementRevision} from "./requirement-revisions.js";
 import {addUsage, emptyTokenUsage, normalizeTokens, SessionUsageTracker, type TokenUsage} from "./token-usage.js";
+import {decidePhase2Retry, Phase2ExecutionError} from "./retry-policy.js";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null}),
     db = new Pool({connectionString: process.env.DATABASE_URL}),
@@ -103,17 +105,38 @@ async function claim(runId: string) {
     return result.rowCount === 1 ? Number(result.rows[0].attemptCount) : undefined
 }
 
-async function finishFailedAttempt(runId: string, message: string, completed: Set<string>) {
+async function finishFailedAttempt(runId: string, message: string, completed: Set<string>, retryQueued: boolean) {
     const result = await db.query(`update "Phase2Run" set
         "accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END,
         "attemptStartedAt"=NULL,"completedStages"=$1,"errorMessage"=$2,
-        status=CASE WHEN "autoRetry" THEN 'QUEUED'::"RunStatus" ELSE 'FAILED'::"RunStatus" END,
-        "currentStage"=CASE WHEN "autoRetry" THEN 'retry_queued' ELSE "currentStage" END,
-        "finishedAt"=CASE WHEN "autoRetry" THEN NULL ELSE statement_timestamp() AT TIME ZONE 'UTC' END,
+        status=CASE WHEN $4 THEN 'QUEUED'::"RunStatus" ELSE 'FAILED'::"RunStatus" END,
+        "currentStage"=CASE WHEN $4 THEN 'retry_queued' ELSE "currentStage" END,
+        "finishedAt"=CASE WHEN $4 THEN NULL ELSE statement_timestamp() AT TIME ZONE 'UTC' END,
         "opencodeSessionId"=NULL
         where id=$3 and status='RUNNING' returning status,"autoRetry","attemptCount"`,
-        [JSON.stringify([...completed]), message, runId]);
+        [JSON.stringify([...completed]), message, runId, retryQueued]);
     return result.rows[0] as {status: string; autoRetry: boolean; attemptCount: number} | undefined
+}
+
+async function retryContext(runId: string) {
+    const result = await db.query(`select r."autoRetry",
+        (select e.payload->>'fingerprint' from "RunEvent" e
+         where e."runId"=r.id and e.type='run.attempt_failed' order by e.id desc limit 1) as "previousFingerprint"
+        from "Phase2Run" r where r.id=$1`, [runId]);
+    return result.rows[0] as {autoRetry: boolean; previousFingerprint?: string} | undefined
+}
+
+async function stageInputFingerprint(workspace: string, stage: string) {
+    const names = stage.includes("hardware_interface")
+        ? ["source-artifacts.json", "hardware-interface-candidates.json"]
+        : ["source-artifacts.json"];
+    const hash = createHash("sha256");
+    for (const name of names) {
+        const file = path.join(workspace, ".matrix", "data", name);
+        try { hash.update(name).update(await readFile(file)) }
+        catch { hash.update(name).update("<missing>") }
+    }
+    return hash.digest("hex")
 }
 
 async function cancelled(runId: string) {
@@ -241,10 +264,15 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
         await event(runId, "stage.running", {mode, batchIndex});
         return
     }
-    if (part.state.status === "error") throw new Error(`${mode}: ${part.state.error}`);
+    if (part.state.status === "error") throw new Phase2ExecutionError(`${mode}: ${part.state.error}`, "TOOL_EXECUTION_ERROR", true);
     if (part.state.status !== "completed") return;
     const output = parseToolOutput(part.state.output, part.state.metadata);
-    if (output.ok !== true) throw new Error(`${mode}: ${output.error || "业务执行失败"}`);
+    if (output.ok !== true) throw new Phase2ExecutionError(
+        `${mode}: ${output.error || "业务执行失败"}`,
+        String(output.error_code || "WORKFLOW_BUSINESS_ERROR"),
+        output.retryable === true,
+        typeof output.failed_candidate_id === "string" ? output.failed_candidate_id : undefined,
+    );
     const actual = output.mode || mode;
     await verifyStageArtifact(workspace, actual);
     completed.add(actual);
@@ -340,14 +368,28 @@ new Worker("phase2", async job => {
         const reason = describeError(error);
         console.error("Phase2 attempt failed", {runId, stage: failureStage, reason, error});
         const message = `失败阶段：${failureStage}；原因：${reason}`;
-        const failed = await finishFailedAttempt(runId, message, completed);
+        const context = await retryContext(runId);
+        const retry = decidePhase2Retry({
+            autoRetry: context?.autoRetry === true,
+            attempt,
+            stage: failureStage,
+            error,
+            inputFingerprint: await stageInputFingerprint(p.workspacePath, failureStage),
+            previousFingerprint: context?.previousFingerprint,
+        });
+        const failed = await finishFailedAttempt(runId, message, completed, retry.shouldRetry);
         if (!failed) return {cancelled: true};
-        await event(runId, "run.attempt_failed", {message, stage: failureStage, reason, attempt: failed.attemptCount});
-        if (failed.autoRetry) {
-            await event(runId, "run.retry_queued", {attempt: failed.attemptCount + 1});
+        await event(runId, "run.attempt_failed", {
+            message, stage: failureStage, reason, attempt: failed.attemptCount,
+            errorCode: retry.errorCode, retryable: retry.retryable, fingerprint: retry.fingerprint,
+            failedCandidateId: retry.failedCandidateId, stopReason: retry.stopReason,
+        });
+        if (retry.shouldRetry) {
+            await event(runId, "run.retry_queued", {attempt: failed.attemptCount + 1, delayMs: retry.delayMs});
             try {
                 await phase2Queue.add("matrix-phase2-retry", {runId, projectId: p.id}, {
                     jobId: `${runId}-retry-${failed.attemptCount}-${Date.now()}`,
+                    delay: retry.delayMs,
                     removeOnComplete: 100, removeOnFail: 100
                 });
                 return {retrying: true}
