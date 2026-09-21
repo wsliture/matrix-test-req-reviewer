@@ -178,6 +178,14 @@ export function formatChapter2Processor(processorType: unknown, processorFrequen
     return ""
 }
 
+export function formatChapter2MemoryReference(summary: unknown, tableCount: number): string {
+    if (tableCount <= 0) return "";
+    const value = text(summary).trim();
+    const separator = value && !/[。！？.!?]$/u.test(value) ? "。" : "";
+    const tableReference = tableCount === 1 ? "表2-1" : `表2-1至表2-${tableCount}`;
+    return `${separator}具体见${tableReference}。`
+}
+
 function compressRequirementIds(ids: string[]) {
     const result: string[] = [];
     for (let index = 0; index < ids.length;) {
@@ -240,7 +248,7 @@ function chapter2(data: Json, artifact: string, lookup: ReturnType<typeof maps>)
     blocks[0].sourceBinding = rootBinding("source_refs", refs(data), "source_refs");
     blocks.push(richParagraph([editablePart(data.system_relationship, rootBinding("system_relationship", data.system_relationship, "multiline"))]),
         richParagraph([{text: "a. CPU："}, editablePart(data.processor_type, rootBinding("processor_type", data.processor_type)), {text: "，主频："}, editablePart(data.processor_frequency, rootBinding("processor_frequency", data.processor_frequency))]),
-        richParagraph([{text: "b. "}, editablePart(data.memory_io_summary, rootBinding("memory_io_summary", data.memory_io_summary, "multiline")), {text: data.memory_io_tables?.length ? `，具体见表2-1至表2-${data.memory_io_tables.length}。` : ""}]));
+        richParagraph([{text: "b. "}, editablePart(data.memory_io_summary, rootBinding("memory_io_summary", data.memory_io_summary, "multiline")), {text: formatChapter2MemoryReference(data.memory_io_summary, data.memory_io_tables?.length || 0)}]));
     (data.memory_io_tables || []).forEach((item: Json, index: number) => {
         const value = normalizedTable(item, `存储器及I/O说明表${index + 1}`);
         if (!value) return;

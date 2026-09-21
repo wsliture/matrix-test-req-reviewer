@@ -6,6 +6,7 @@ import {
     buildPhase2Document,
     chapter1DisplayReferences,
     cleanTableTitle,
+    formatChapter2MemoryReference,
     formatChapter2Processor,
     formatFunctionalFlowItems,
     normalizedTable
@@ -84,6 +85,12 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         expect(formatChapter2Processor("", "")).toBe("")
     });
 
+    it("formats chapter 2 memory table references for single and multiple tables", () => {
+        expect(formatChapter2MemoryReference("程序存储器用于存放程序。", 1)).toBe("具体见表2-1。");
+        expect(formatChapter2MemoryReference("程序存储器用于存放程序", 2)).toBe("。具体见表2-1至表2-2。");
+        expect(formatChapter2MemoryReference("程序存储器用于存放程序。", 0)).toBe("")
+    });
+
     it("renders the canonical five-column interrupt contract and ignores legacy fields", async () => {
         const workspace = await mkdtemp(path.join(tmpdir(), "phase2-document-"));
         const dataDir = path.join(workspace, ".matrix", "data");
@@ -118,7 +125,9 @@ describe("chapter 1 and chapter 2 presentation contracts", () => {
         const interrupt = chapter?.blocks.find(block => block.type === "table" && block.caption?.includes("中断使用说明"));
         expect(relationship?.text).toBe("下位机与上位机交换数据。");
         expect(processor?.text).toBe("a. CPU：BM3803，主频：48MHz");
-        expect(memorySummary?.text).toBe("b. 存储器地址空间见下表，具体见表2-1至表2-1。");
+        expect(memorySummary?.text).toBe("b. 存储器地址空间见下表。具体见表2-1。");
+        expect(memorySummary?.text).not.toContain("，具体见表2-1");
+        expect(memorySummary?.text).not.toContain("表2-1至表2-1");
         expect(interruptLead?.text).toBe("c. 中断使用情况如下表：");
         expect(memory?.cellBindings?.[0].map(item => item?.kind)).toEqual([
             "table_cell", "table_cell", "table_cell", "table_cell"
