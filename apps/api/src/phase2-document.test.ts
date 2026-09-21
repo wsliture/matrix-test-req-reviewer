@@ -289,6 +289,14 @@ describe("raw open question placement", () => {
         }));
 
         const document = await buildPhase2Document(workspace, []);
+        const interfaceSummary = document.chapters.find(item => item.number === "4.3")?.blocks
+            .find(block => block.type === "table" && block.caption?.includes("接口需求项总结表"));
+        expect(interfaceSummary?.columns).toEqual(["序号", "接口需求描述", "对应测试需求标识", "相关说明", "对应接口名称", "接口标识"]);
+        expect(interfaceSummary?.rows).toEqual([
+            ["1", "CAN需求", "TR-JK-001", "接口正常情况的测试", "CAN接口", "IF-CAN-001"],
+            ["2", "串口需求", "TR-JK-002", "接口正常情况的测试", "RS422接口", "IF-RS422-001"]
+        ]);
+        expect(interfaceSummary?.cellBindings?.every(row => row.length === 6)).toBe(true);
         const heading = (chapter: string, value: string) => document.chapters.find(item => item.number === chapter)?.blocks
             .find(block => block.type === "heading" && block.text?.startsWith(value));
         expect(heading("3.1", "3.1.1 ")?.openQuestions).toEqual(["确认CAN波特率"]);

@@ -539,14 +539,19 @@ function nonFunctional(data: Json, artifact: string, number: string, title: stri
     const sectionNode = lookup.anchor(artifact, sectionNo);
     const renderedRows: string[][] = rows.map((row: Json, index: number) => {
         const requirementId = text(row.requirement_id || row.test_requirement_id) || `${config.prefix}-${String(index + 1).padStart(3, "0")}`;
-        return [String(index + 1), text(row[config.description]), requirementId, text(row.related_description)]
+        return number === "4.3"
+            ? [String(index + 1), text(row[config.description]), requirementId, text(row.related_description), text(row.interface_name), text(row.interface_id)]
+            : [String(index + 1), text(row[config.description]), requirementId, text(row.related_description)]
     });
-    const summary = table(`表${number}-1  ${config.noun}需求项总结表`, ["序号", `${config.noun}需求描述`, "对应测试需求标识", "相关说明"], renderedRows);
+    const summary = table(`表${number}-1  ${config.noun}需求项总结表`, number === "4.3"
+        ? ["序号", `${config.noun}需求描述`, "对应测试需求标识", "相关说明", "对应接口名称", "接口标识"]
+        : ["序号", `${config.noun}需求描述`, "对应测试需求标识", "相关说明"], renderedRows);
     summary.rowAnchorIds = renderedRows.map(row => lookup.anchor(artifact, undefined, row[2])?.id);
     summary.cellBindings = renderedRows.map((row, index) => {
         const nodeId = summary.rowAnchorIds?.[index], requirementId = row[2], extra = {business_id: requirementId};
         return [undefined, binding(artifact, nodeId, config.description, rows[index]?.[config.description], extra, "multiline"), undefined,
-            binding(artifact, nodeId, "related_description", rows[index]?.related_description, extra, "multiline", RELATED_DESCRIPTION_OPTIONS[number])]
+            binding(artifact, nodeId, "related_description", rows[index]?.related_description, extra, "multiline", RELATED_DESCRIPTION_OPTIONS[number]),
+            ...(number === "4.3" ? [undefined, undefined] : [])]
     });
     summary.rowSourceBindings = renderedRows.map((row, index) => binding(artifact, summary.rowAnchorIds?.[index], "source_refs", refs(rows[index]), {business_id: row[2]}, "source_refs"));
     const baseBinding: Phase2RequirementBinding = {container_key: editKey({artifact, field: "rows"}), allow_add: number !== "4.3", prefix: config.prefix,
