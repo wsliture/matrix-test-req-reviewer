@@ -270,7 +270,7 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
     if (output.ok !== true) throw new Phase2ExecutionError(
         `${mode}: ${output.error || "业务执行失败"}`,
         String(output.error_code || "WORKFLOW_BUSINESS_ERROR"),
-        output.retryable === true,
+        true,
         typeof output.failed_candidate_id === "string" ? output.failed_candidate_id : undefined,
     );
     const actual = output.mode || mode;

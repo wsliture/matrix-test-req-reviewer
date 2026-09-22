@@ -1,6 +1,5 @@
 import {createHash} from "node:crypto";
 
-export const PHASE2_MAX_ATTEMPTS = 3;
 export const PHASE2_RETRY_BASE_DELAY_MS = 2_000;
 
 export class Phase2ExecutionError extends Error {
@@ -24,7 +23,8 @@ export function failureFingerprint(stage: string, error: unknown) {
 }
 
 export function retryDelayMs(attempt: number) {
-    return PHASE2_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1))
+    void attempt;
+    return PHASE2_RETRY_BASE_DELAY_MS
 }
 
 export function decidePhase2Retry(input: {
@@ -39,18 +39,17 @@ export function decidePhase2Retry(input: {
     const fingerprint = input.inputFingerprint
         ? createHash("sha256").update(JSON.stringify({stage: input.stage, errorCode, inputFingerprint: input.inputFingerprint})).digest("hex")
         : failureFingerprint(input.stage, input.error);
-    const retryable = input.error instanceof Phase2ExecutionError ? input.error.retryable : true;
-    let stopReason: "disabled" | "non_retryable" | "max_attempts" | "repeated_failure" | undefined;
-    if (!input.autoRetry) stopReason = "disabled";
-    else if (!retryable) stopReason = "non_retryable";
-    else if (input.attempt >= PHASE2_MAX_ATTEMPTS) stopReason = "max_attempts";
-    else if (input.previousFingerprint === fingerprint) stopReason = "repeated_failure";
+    // Preserve the legacy operator contract: the UI switch is the sole retry
+    // gate. Error classification and fingerprints remain diagnostic metadata,
+    // but never suppress an enabled automatic retry.
+    const retryable = input.autoRetry;
+    const stopReason: "disabled" | undefined = input.autoRetry ? undefined : "disabled";
     return {
         shouldRetry: stopReason === undefined,
         retryable,
         fingerprint,
         stopReason,
-        maxAttempts: PHASE2_MAX_ATTEMPTS,
+        maxAttempts: null,
         delayMs: retryDelayMs(input.attempt),
         errorCode,
         failedCandidateId: input.error instanceof Phase2ExecutionError ? input.error.failedCandidateId : undefined,
