@@ -4,6 +4,7 @@
   [string]$DownloadCacheDirectory = "release/download-cache",
   [string]$HostProxyUrl = "",
   [switch]$RefreshDownloads,
+  [switch]$ReuseLocalThirdPartyImages,
   [switch]$SkipBuild
 )
 
@@ -121,11 +122,19 @@ if (-not $SkipBuild) {
 $ThirdPartyImageDefinitions = @(
   @{ Source = "postgres:16-alpine"; Target = "requirements-manager-postgres:arm64" },
   @{ Source = "redis:7-alpine"; Target = "requirements-manager-redis:arm64" },
-  # MinIO publishes release images on Quay. The historical Docker Hub path can
-  # return "insufficient_scope" even though the same release exists on Quay.
+  # Registry availability can change; verified local images can be reused via
+  # -ReuseLocalThirdPartyImages without resolving remote manifests.
   @{ Source = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"; Target = "requirements-manager-minio:arm64" }
 )
 foreach ($Definition in $ThirdPartyImageDefinitions) {
+  if ($ReuseLocalThirdPartyImages) {
+    $LocalArchitecture = & docker image inspect $Definition.Target --format "{{.Architecture}}"
+    if ($LASTEXITCODE -ne 0 -or "$LocalArchitecture".Trim() -ne "arm64") {
+      throw "无法复用本地镜像：$($Definition.Target) 不存在或不是ARM64架构。请先导入可信的ARM64镜像，或去掉-ReuseLocalThirdPartyImages重新构建。"
+    }
+    Write-Host "复用本地ARM64基础镜像：$($Definition.Target)"
+    continue
+  }
   Write-Host "构建ARM64基础镜像：$($Definition.Source) -> $($Definition.Target)"
   Invoke-Checked "docker" (@(
     "buildx", "build",
@@ -138,6 +147,10 @@ foreach ($Definition in $ThirdPartyImageDefinitions) {
     $ProjectRoot
   ))
 }
+
+Write-Host "验证ARM64 MinIO和健康检查客户端..."
+Invoke-Checked "docker" @("run", "--rm", "--platform", "linux/arm64", "requirements-manager-minio:arm64", "--version")
+Invoke-Checked "docker" @("run", "--rm", "--platform", "linux/arm64", "--entrypoint", "mc", "requirements-manager-minio:arm64", "--version")
 
 $ApplicationImages = @(
   "requirements-manager-api:arm64",

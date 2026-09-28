@@ -8,6 +8,37 @@
 - 外部防火墙仅需放行TCP `8089`
 - 能访问内部模型服务；运行过程不需要访问互联网
 
+## Windows构建机打包
+
+### 更新代码后构建离线包（推荐）
+
+如果本地已有三个 `requirements-manager-postgres:arm64`、
+`requirements-manager-redis:arm64`、`requirements-manager-minio:arm64` 镜像，可在
+`requirements-manager` 目录执行：
+
+```powershell
+.\scripts\build-arm64-offline.ps1 -ReuseLocalThirdPartyImages
+```
+
+该命令会从当前代码重新构建API、Worker、Web、OpenCode四个应用镜像，再生成离线包，
+确保代码更新进入交付镜像。`-ReuseLocalThirdPartyImages` 只复用本地PostgreSQL、Redis、MinIO
+第三方镜像，不会跳过应用镜像构建。脚本会检查镜像的ARM64架构，并验证MinIO和mc可运行；
+缺失镜像或架构不匹配会立即报错。
+本地镜像应来自可信来源；Compose二进制已缓存时会自动复用。
+
+### 应用镜像已构建完成后继续打包
+
+仅当四个应用镜像已成功构建，且此后没有修改代码或构建配置时，才可执行：
+
+```powershell
+.\scripts\build-arm64-offline.ps1 -SkipBuild -ReuseLocalThirdPartyImages
+```
+
+`-SkipBuild` 跳过四个应用镜像的构建，直接将本机已有镜像打包，**不会把新的代码修改
+构建进镜像**。修改代码后请使用上面的推荐命令，不要添加 `-SkipBuild`。
+仅使用 `-SkipBuild` 仍会构建第三方镜像；是否复用第三方镜像由
+`-ReuseLocalThirdPartyImages` 单独控制。
+
 ## 安装
 
 ```bash
