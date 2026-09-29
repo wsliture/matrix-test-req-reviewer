@@ -10,6 +10,20 @@
 
 ## Windows构建机打包
 
+开发和离线包统一使用Coollabs第三方镜像
+`ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`（固定版本，非MinIO官方发布镜像）。
+离线部署仍使用本地标签 `requirements-manager-minio:arm64`，服务器不需要访问GHCR。
+
+首次构建或从旧MinIO切换时，在 `requirements-manager` 目录执行：
+
+```powershell
+.\scripts\build-arm64-offline.ps1
+```
+
+该命令重新构建应用及第三方镜像。后续可以使用下面的复用命令；如果本地MinIO仍是旧版本，
+脚本会拒绝打包并提示重新获取。已有部署升级前必须备份数据，从新包目录运行现有
+`./upgrade.sh /旧部署目录` 流程，不要删除或覆盖旧数据目录。
+
 ### 更新代码后构建离线包（推荐）
 
 如果本地已有三个 `requirements-manager-postgres:arm64`、
@@ -23,7 +37,7 @@
 该命令会从当前代码重新构建API、Worker、Web、OpenCode四个应用镜像，再生成离线包，
 确保代码更新进入交付镜像。`-ReuseLocalThirdPartyImages` 只复用本地PostgreSQL、Redis、MinIO
 第三方镜像，不会跳过应用镜像构建。脚本会检查镜像的ARM64架构，并验证MinIO和mc可运行；
-缺失镜像或架构不匹配会立即报错。
+缺失镜像、架构不匹配或MinIO版本不是指定的10月版本会报错。
 本地镜像应来自可信来源；Compose二进制已缓存时会自动复用。
 
 ### 应用镜像已构建完成后继续打包

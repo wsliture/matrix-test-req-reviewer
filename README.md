@@ -223,7 +223,12 @@ WEB_ORIGIN=http://localhost:5173
 
 ## ARM64离线部署
 
-项目支持在x86开发机上交叉构建Linux ARM64离线部署包。打包机需要Docker Buildx并可访问Docker Hub、npm和GitHub；目标服务器只需要Docker Engine，不需要网络或预装Compose。
+项目支持在x86开发机上交叉构建Linux ARM64离线部署包。打包机需要Docker Buildx并可访问Docker Hub、GHCR、npm和GitHub；目标服务器只需要Docker Engine，不需要网络或预装Compose。
+
+开发和离线构建统一使用Coollabs第三方镜像 `ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`，
+固定版本而非 `latest`。开发环境首次切换时，先备份MinIO数据卷，再执行
+`docker compose pull minio` 和 `docker compose up -d minio`；保留原数据卷，勿使用 `down -v`。
+离线部署继续使用 `requirements-manager-minio:arm64` 本地标签，已有服务器先备份，再按现有离线升级流程操作。
 
 ### 1. 在x86开发机生成离线包
 
@@ -233,6 +238,11 @@ WEB_ORIGIN=http://localhost:5173
 cd requirements-manager
 ./scripts/build-arm64-offline.ps1
 ```
+
+首次切换使用上述完整构建命令。后续本地第三方镜像齐全且MinIO版本正确时，可执行
+`./scripts/build-arm64-offline.ps1 -ReuseLocalThirdPartyImages`，仍会构建最新应用代码。
+脚本会拒绝复用旧版MinIO。`-SkipBuild` 仅适用于应用镜像已构建且代码未变的继续打包场景，
+更新代码后不要使用它。
 
 如需使用代理，先为当前终端设置代理环境变量，Docker Desktop也需要配置可访问的构建代理：
 
