@@ -37,13 +37,13 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
     const settingsItems = settingsTabsForRole(user?.role).map(tab => ({
         key: `settings:${tab}`, ...settingPresentation[tab]
     }));
-    return <><Layout.Header className="header"><b>Matrix测试需求管理</b>{backTo &&
+    return <><Layout.Header className="header"><b>SunwiseMatriX TR</b>{backTo &&
         <Button ghost icon={<ArrowLeftOutlined/>} onClick={() => {
             if (!beforeLeave || beforeLeave()) navigate(backTo)
         }}>{backLabel}</Button>}<span className="grow"/>{actions}<Tooltip title="下载使用手册">
         <Button ghost shape="circle" aria-label="下载使用手册" icon={<QuestionCircleOutlined/>}
                 href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
-                download="Matrix-Req-Manager用户使用手册.pdf"/>
+                download="SunwiseMatriX TR用户使用手册.pdf"/>
     </Tooltip><Dropdown placement="bottomRight" trigger={["click"]} menu={{
         items: [{key: "account", disabled: true, label: <div className="account-menu-summary">
             <b>{user?.username || "当前用户"}</b><span>{roleName}</span>
