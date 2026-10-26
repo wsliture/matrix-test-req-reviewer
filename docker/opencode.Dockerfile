@@ -10,7 +10,7 @@ RUN case "$TARGETARCH" in \
 COPY package.json bun.lock ./
 RUN bun install --ignore-scripts
 COPY src src
-COPY scripts/verify-node-runner.mjs scripts/verify-node-runner.mjs
+COPY scripts scripts
 COPY skills skills
 COPY templates templates
 COPY standards standards

@@ -2940,3 +2940,8 @@ html, body, #root {
         grid-template-columns: 1fr
     }
 }
+
+.project-heading-hint,
+.ant-upload-wrapper .ant-upload-drag p.project-heading-hint {
+    color: #ff4d4f;
+}

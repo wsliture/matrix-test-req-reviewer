@@ -159,7 +159,12 @@ function Shell({children, backTo, backLabel = "返回项目", actions, beforeLea
         actions={actions} beforeLeave={beforeLeave}/>}{children}</Layout>
 }
 
+const projectArchiveHint = "上传仅包含DOCX源文档的ZIP压缩包";
+const projectHeadingHint = '所有的DOCX文档标题的样式都必须改为 "标题1", "标题2", "标题N"';
+
 function Projects() {
+    const [pendingProject, setPendingProject] = useState<{name: string; file: File} | null>(null);
+    const creatingProject = useRef(false);
     const qc = useQueryClient(), nav = useNavigate(), query = useQuery({
         queryKey: ["projects"],
         queryFn: () => api<Project[]>("/projects"),
@@ -172,6 +177,7 @@ function Projects() {
             form.append("file", file);
             return api<Project>("/projects", {method: "POST", body: form})
         }, onSuccess: p => {
+            setPendingProject(null);
             setOpen(false);
             setArchiveFile(null);
             createForm.resetFields();
@@ -215,14 +221,19 @@ function Projects() {
                                                                                              </div>}>
         <p>创建时间：{localMinute(p.createdAt)}</p><ProjectActivity activity={p.currentActivity}/></Card></Col>)}</Row><Modal open={open} title="新建项目"
         okText="创建项目" cancelText="取消" confirmLoading={upload.isPending}
+        okButtonProps={{disabled: !!pendingProject}} cancelButtonProps={{disabled: upload.isPending}}
+        closable={!upload.isPending} maskClosable={!upload.isPending} keyboard={!upload.isPending}
         onCancel={() => {
+            if (creatingProject.current) return;
+            setPendingProject(null);
             setOpen(false);
             setArchiveFile(null);
             upload.reset();
             createForm.resetFields()
         }} onOk={() => createForm.submit()}><Form form={createForm} layout="vertical" onFinish={values => {
+        if (pendingProject || creatingProject.current) return;
         if (!archiveFile) return message.error("请选择源文档ZIP压缩包");
-        upload.mutate({name: values.name.trim(), file: archiveFile})
+        setPendingProject({name: values.name.trim(), file: archiveFile})
     }}><Form.Item name="name" label="项目名称" rules={[{required: true, whitespace: true, message: "请输入项目名称"},
         {max: 100, message: "项目名称不能超过100个字符"},
         {validator: (_, value) => {
@@ -236,8 +247,27 @@ function Projects() {
                 setArchiveFile(file);
                 return false
             }} onRemove={() => setArchiveFile(null)}><p><FileZipOutlined className="upload-icon"/></p>
-            <p>上传仅包含DOCX源文档的ZIP压缩包</p><p className="upload-hint">不允许包含DOC、PDF、.matrix或其他格式文件</p>
-        </Upload.Dragger></Form.Item></Form>{upload.error && <Alert type="error" showIcon message={upload.error.message}/>}</Modal></Content></Shell>
+            <p>{projectArchiveHint}</p><p className="upload-hint project-heading-hint">{projectHeadingHint}</p>
+        </Upload.Dragger></Form.Item></Form>{upload.error && <Alert type="error" showIcon message={upload.error.message}/>}</Modal>
+        <Modal open={!!pendingProject} title="创建项目确认" okText="确认" cancelText="取消"
+            confirmLoading={upload.isPending} cancelButtonProps={{disabled: upload.isPending}}
+            closable={!upload.isPending} maskClosable={false} keyboard={!upload.isPending}
+            onCancel={() => {
+                if (!creatingProject.current) setPendingProject(null)
+            }} onOk={async () => {
+                if (!pendingProject || creatingProject.current) return;
+                creatingProject.current = true;
+                try {
+                    await upload.mutateAsync(pendingProject)
+                } catch {
+                    setPendingProject(null)
+                } finally {
+                    creatingProject.current = false
+                }
+            }}>
+            <p>{projectArchiveHint}</p>
+            <p className="project-heading-hint">{projectHeadingHint}</p>
+        </Modal></Content></Shell>
 }
 
 function Status({value}: { value: string }) {
