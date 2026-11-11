@@ -1,3 +1,5 @@
+import {useSearchParams} from "react-router-dom";
+import {BrowseLink, pageHref} from "./navigation";
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import {json} from "@codemirror/lang-json";
@@ -23,9 +25,9 @@ function readableSize(value: number) {
     return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-function treeData(nodes: DebugTreeNode[]): any[] {
-    return nodes.map(node => ({key: node.path, title: node.name, isLeaf: node.type === "file",
-        selectable: node.type === "file", children: node.children ? treeData(node.children) : undefined}))
+function treeData(nodes: DebugTreeNode[], link: (node: DebugTreeNode) => React.ReactNode): any[] {
+    return nodes.map(node => ({key: node.path, title: node.type === "file" ? link(node) : node.name, isLeaf: node.type === "file",
+        selectable: node.type === "file", children: node.children ? treeData(node.children, link) : undefined}))
 }
 
 function extensionsFor(filePath: string) {
@@ -48,7 +50,10 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
     running: boolean;
     onDirtyChange: (dirty: boolean) => void
 }) {
-    const qc = useQueryClient(), [selectedPath, setSelectedPath] = useState<string>(), [draft, setDraft] = useState(""),
+    const [params, setParams] = useSearchParams();
+    const selectedPath = params.get("debugFile") || undefined;
+    const setSelectedPath = (path: string | undefined) => setParams(current => { const next = new URLSearchParams(current); if (path) next.set("debugFile", path); else next.delete("debugFile"); return next });
+    const qc = useQueryClient(), [draft, setDraft] = useState(""),
         [externalConflict, setExternalConflict] = useState(false), savingRef = useRef(false), dirtyRef = useRef(false),
         selectedRef = useRef<string | undefined>(undefined);
     const editorExtensions = useMemo(() => extensionsFor(selectedPath || ""), [selectedPath]);
@@ -141,7 +146,7 @@ export function DebugFilesPanel({projectId, running, onDirtyChange}: {
             description="保存或删除可能与 Agent 同时写入文件；系统会检测版本冲突，但操作仍可能影响当前流程。"/>}
         <div className="debug-files-body">
             <div className="debug-files-tree">{tree.isLoading ? <Spin/> : tree.error ? <Alert type="error" message={tree.error.message}/> :
-                tree.data?.children.length ? <Tree showLine blockNode treeData={treeData(tree.data.children)} selectedKeys={selectedPath ? [selectedPath] : []}
+                tree.data?.children.length ? <Tree showLine blockNode treeData={treeData(tree.data.children, node => <BrowseLink className="debug-file-link" to={pageHref(`/projects/${projectId}`, {debugFile: node.path})} beforeLeave={() => node.path === selectedPath || !dirty || window.confirm("当前文件有未保存的修改，切换文件将丢失这些修改，是否继续？")}>{node.name}</BrowseLink>)} selectedKeys={selectedPath ? [selectedPath] : []}
                     onSelect={keys => keys[0] && choose(String(keys[0]))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="项目目录为空"/>}</div>
             <div className="debug-file-editor">{!selectedPath ? <Empty description="请选择文件"/> : file.isLoading ? <Spin/> : file.error ? <Alert type="error" message={file.error.message}/> : info && <>
                 <div className="debug-file-toolbar"><div className="debug-file-title"><Typography.Text strong title={info.path}>{info.path}</Typography.Text>

@@ -1,3 +1,5 @@
+import {useProjectPageTitle} from "./projectPageTitle";
+import {BrowseButton, BrowseLink, reviewHref, resolveReviewLocation} from "./navigation";
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
 import {
@@ -154,9 +156,9 @@ function SessionExpired({onLogin}: {onLogin: () => void}) {
         extra={<Button type="primary" size="large" onClick={onLogin}>重新登录</Button>}/></div>
 }
 
-function Shell({children, backTo, backLabel = "返回项目", actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; backTo?: string; backLabel?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
+function Shell({children, projectName, backTooltip, backTo, backLabel = "返回项目", actions, beforeLeave, hideHeader = false, className = ""}: { children: React.ReactNode; projectName?: string; backTooltip?: string; backTo?: string; backLabel?: string; actions?: React.ReactNode; beforeLeave?: () => boolean; hideHeader?: boolean; className?: string }) {
     return <Layout className={`shell ${className}`}>{!hideHeader && <AppHeader backTo={backTo} backLabel={backLabel}
-        actions={actions} beforeLeave={beforeLeave}/>}{children}</Layout>
+        actions={actions} beforeLeave={beforeLeave} projectName={projectName} backTooltip={backTooltip}/>}{children}</Layout>
 }
 
 const projectArchiveHint = "上传仅包含DOCX源文档的ZIP压缩包";
@@ -200,8 +202,7 @@ function Projects() {
         gutter={[16, 16]}>{query.data?.slice().sort((left, right) => {
             const createdAtDifference = Date.parse(right.createdAt) - Date.parse(left.createdAt);
             return createdAtDifference || right.id.localeCompare(left.id)
-        }).map(p => <Col xs={24} md={12} xl={8} key={p.id}><Card hoverable title={p.name}
-                                                                                             onClick={() => location.href = `/projects/${p.id}`}
+        }).map(p => <Col xs={24} md={12} xl={8} key={p.id}><Card hoverable className="project-link-card" title={<BrowseLink className="project-card-link" to={`/projects/${p.id}`}>{p.name}</BrowseLink>}
                                                                                              extra={<div
                                                                                                  data-project-action
                                                                                                  onClick={event => event.stopPropagation()}>
@@ -490,27 +491,26 @@ function RunLogs({run, onEvents, scrollPositions}: {
     </Card></>
 }
 
-function ChapterStatus({project, run}: { project: Project; run?: Phase2Run }) {
-    const nav = useNavigate();
+function ChapterStatus({project, run, beforeLeave}: { project: Project; run?: Phase2Run; beforeLeave?: () => boolean }) {
     const completed = new Set(run?.completedStages || []), missing = new Set(project.missingArtifacts || []),
         failed = run?.status === "FAILED";
     return <Card title="章节生成状态" className="chapter-status"><Row
         gutter={[12, 12]}>{CHAPTERS.map(([name, stage, artifact, chapter]) => {
         const ready = run ? completed.has(stage) : !missing.has(artifact);
         return <Col xs={24} md={12} xl={8} key={stage}>
-            <button type="button" className={`chapter-status-row${ready ? " chapter-status-ready" : ""}`}
-                    disabled={!ready} onClick={() => ready && nav(`/projects/${project.id}/review?chapter=${encodeURIComponent(chapter)}`)}>
+            <BrowseLink to={reviewHref(project.id, {chapter})} beforeLeave={beforeLeave} className={`chapter-status-row${ready ? " chapter-status-ready" : ""}`}
+                    disabled={!ready}>
                 <span>{name}</span>{ready ?
                 <CheckCircleFilled className="chapter-ok" title="已成功生成"/> :
                 <CloseCircleFilled className={failed ? "chapter-failed" : "chapter-pending"}
-                                   title={failed ? "未生成" : "尚未生成"}/>}</button>
+                                   title={failed ? "未生成" : "尚未生成"}/>}</BrowseLink>
         </Col>
     })}</Row></Card>
 }
 
 function ProjectPage() {
-    const {id = ""} = useParams(), nav = useNavigate(), qc = useQueryClient(),
-        user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(false),
+    const {id = ""} = useParams(), [projectParams] = useSearchParams(), qc = useQueryClient(),
+        user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(projectParams.has("debugFile")),
         [debugDirty, setDebugDirty] = useState(false), projectContentRef = useRef<HTMLDivElement>(null),
         pendingContentScrollRef = useRef<number | undefined>(undefined),
         runLogScrollPositionsRef = useRef<Map<string, number>>(new Map()), query = useQuery({
@@ -568,6 +568,7 @@ function ProjectPage() {
             window.scrollTo({top: Math.max(0, contentDocumentTop + contentOffset)})
         }
     }, [debugOpen]);
+    useEffect(() => { if (projectParams.has("debugFile")) setDebugOpen(true) }, [projectParams]);
     if (query.isLoading) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     if (query.error) {
         return <Shell backTo="/" backLabel="返回项目列表"><Content className="page"><Alert type="warning" showIcon
@@ -589,11 +590,11 @@ function ProjectPage() {
                     : Math.max(0, window.scrollY - contentDocumentTop)
             }
             setDebugOpen(value => !value)
-        }}>{debugOpen ? "关闭调试模式" : "调试模式"}</Button>}</Space><ChapterStatus project={p} run={latest}/>
+        }}>{debugOpen ? "关闭调试模式" : "调试模式"}</Button>}</Space><ChapterStatus project={p} run={latest} beforeLeave={confirmDebugLeave}/>
         {p.status === "READY_FOR_REVIEW" && <div className="project-workbench-entry">
             <div><b>{reviewSummaryText(p.reviewSummary)}</b>
                 <span>可查看、编辑、评审、执行变更分析并导出第三方测试需求</span></div>
-            <Button type="primary" onClick={() => nav(`/projects/${id}/review`)}>打开测试需求工作台</Button>
+            <BrowseButton type="primary" to={reviewHref(id, {})} beforeLeave={confirmDebugLeave}>打开测试需求工作台</BrowseButton>
         </div>}
         <Card title="Phase 2测试需求生成"><Progress percent={latest?.progress || 0}
                                                     status={latest?.status === "FAILED" ? "exception" : running ? "active" : "normal"}/>
@@ -635,11 +636,12 @@ type TreeItem = { key: string; title: React.ReactNode; children?: TreeItem[] };
 
 type FloatingPosition = { x: number; y: number };
 
-function EvaluationWindow({open, children, loading, subject, onSubjectClick, onCancel, onSave}: {
+function EvaluationWindow({open, children, loading, subject, subjectHref, onSubjectClick, onCancel, onSave}: {
     open: boolean;
     children: ReactNode;
     loading: boolean;
     subject?: string;
+    subjectHref?: string;
     onSubjectClick?: () => void;
     onCancel: () => void;
     onSave: () => void
@@ -703,8 +705,8 @@ function EvaluationWindow({open, children, loading, subject, onSubjectClick, onC
              onPointerUp={stopDrag} onPointerCancel={stopDrag}>
             <div className="evaluation-window-heading">
                 <b id="evaluation-window-title">内容质量评估</b>
-                {subject && <button type="button" className="evaluation-window-subject" title={subject}
-                                    onClick={onSubjectClick}>{subject}</button>}
+                {subject && <BrowseLink to={subjectHref || ""} disabled={!subjectHref} className="evaluation-window-subject" title={subject}
+                                    onFollow={onSubjectClick}>{subject}</BrowseLink>}
             </div>
             <Button type="text" icon={<CloseOutlined/>} aria-label="关闭内容质量评估" onClick={onCancel}/>
         </div>
@@ -784,7 +786,8 @@ function Review() {
     const [draftExpectedRevision, setDraftExpectedRevision] = useState<string>();
     const [draftExpectedArtifactRevisions, setDraftExpectedArtifactRevisions] = useState<Record<string, string>>();
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
-    const locatedChapter = useRef<string | undefined>(undefined);
+    const restoredRequirement = useRef<string | undefined>(undefined);
+    const restoredSource = useRef<string | undefined>(undefined);
     const currentUser = qc.getQueryData<CurrentUser>(["me"]);
     useEffect(() => {
         const runId = data.data?.generation?.runId, status = data.data?.generation?.status;
@@ -977,19 +980,18 @@ function Review() {
         cancelDirectoryClose(requirementCloseTimer);
         requirementCloseTimer.current = setTimeout(() => setRequirementDirectoryOpen(false), 300)
     };
-    useEffect(() => {
-        if (!documentId && data.data?.documents[0]) setDocumentId(data.data.documents[0].id)
-    }, [data.data, documentId]);
+    const requirementHref = (targetId: string) => reviewHref(id, {requirementId: targetId, chapter: undefined}, searchParams.toString());
+    const sourceHref = (documentId: string | undefined, sourceNodeId?: string) => reviewHref(id, {documentId, sourceNodeId}, searchParams.toString());
     const selectedDocument = data.data?.documents.find(item => item.id === documentId),
         requirements = data.data?.requirements || [],
         generation = data.data?.generation,
         generationActive = (["QUEUED", "RUNNING"] as string[]).includes(generation?.status || ""),
         generationFinalizing = generationActive && ["generate_phase2_traceability", "finalize_phase2_document"]
             .includes(String(generation?.currentStage || "").split(":", 1)[0]),
-        selectedRequirement = requirements.find(item => item.id === activeRequirementId) || requirements[0],
+        selectedRequirement = requirements.find(item => item.id === activeRequirementId) || (searchParams.has("requirementId") || searchParams.has("chapter") ? undefined : requirements[0]),
         sourceCounts = useMemo(() => new Map((data.data?.links || []).map(link => link.sourceNodeId).map((sourceId, _, all) => [sourceId, all.filter(item => item === sourceId).length])), [data.data?.links]),
         requirementTree = useMemo(() => treeOf(requirements.filter(node => node.nodeType !== "requirement"), node =>
-            <span>{node.number ? `${node.number} ` : ""}{node.title}</span>), [requirements]);
+            <BrowseLink className="requirement-tree-link" to={requirementHref(node.id)} onFollow={() => gotoRequirement(node.id)}>{node.number ? `${node.number} ` : ""}{node.title}</BrowseLink>), [requirements, id, searchParams]);
     const latestReviews = useMemo(() => {
         const latest = new Map<string, ReviewRecord>();
         for (const review of reviews.data || []) if (!latest.has(review.nodeId)) latest.set(review.nodeId, review);
@@ -1156,20 +1158,29 @@ function Review() {
         }
     }, [requirementNavigation, data.data?.phase2Document?.chapters]);
     useEffect(() => {
-        const chapter = searchParams.get("chapter")?.trim();
-        if (!chapter || locatedChapter.current === chapter) return;
-        const target = requirements.find(node => node.nodeType === "section" && node.number === chapter);
-        if (!target) return;
-        locatedChapter.current = chapter;
-        gotoRequirement(target.id)
-    }, [searchParams, requirements]);
+        if (!data.data) return;
+        const resolved = resolveReviewLocation(searchParams, requirements, data.data.documents);
+        const requirementKey = JSON.stringify([id, searchParams.get("requirementId"), searchParams.get("chapter"), resolved.requirementId]);
+        if (restoredRequirement.current !== requirementKey) {
+            restoredRequirement.current = requirementKey;
+            if (resolved.requirementId) gotoRequirement(resolved.requirementId); else setRequirement(undefined);
+            if (resolved.invalidRequirement) message.warning("链接指向的需求或章节已不存在");
+        }
+        const sourceKey = JSON.stringify([id, searchParams.get("documentId"), searchParams.get("sourceNodeId"), resolved.documentId, resolved.sourceNodeId]);
+        if (restoredSource.current !== sourceKey) {
+            restoredSource.current = sourceKey;
+            setDocumentId(resolved.documentId);
+            setSource(resolved.sourceNodeId);
+            setSourceNavigationKey(value => value + 1);
+            if (resolved.invalidSource) message.warning("链接指向的源文档或章节已不存在");
+        }
+    }, [id, searchParams, data.data?.documents, requirements]);
     const uniqueTraceLinks = [...new Map((trace.data || []).map(link => [link.targetNodeId, link])).values()],
         sectionLinks = uniqueTraceLinks.filter(link => link.targetNode.nodeType !== "requirement"),
         requirementLinks = uniqueTraceLinks.filter(link => link.targetNode.nodeType === "requirement"),
         traceGroup = (title: string, links: TraceLink[], compact = false) => links.length ?
             <section className="trace-popover-group"><b>{title}</b><List size="small" dataSource={links}
-                                                                         renderItem={link => <List.Item
-                                                                             onClick={() => gotoRequirement(link.targetNodeId)}>
+                                                                         renderItem={link => <List.Item><BrowseLink className="trace-target-link" to={requirementHref(link.targetNodeId)} onFollow={() => gotoRequirement(link.targetNodeId)}>
                                                                              <div
                                                                                  className={compact ? "trace-target trace-target-compact" : "trace-target"}>
                                                                                  <span
@@ -1182,7 +1193,7 @@ function Review() {
                                                                              {link.direct ?
                                                                                  <Tag color="green">直接</Tag> :
                                                                                  <Tag>子章节</Tag>}
-                                                                         </List.Item>}/></section> : null,
+                                                                         </BrowseLink></List.Item>}/></section> : null,
         traceContent = <div className="trace-popover-content">{trace.isLoading ?
             <Spin/> : uniqueTraceLinks.length ? <>{traceGroup("测试章节", sectionLinks)}{traceGroup("测试需求TR", requirementLinks, true)}</> :
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前章节暂无追溯"/>}</div>,
@@ -1203,9 +1214,9 @@ function Review() {
                                                                                     setTracePopoverNodeId(undefined);
                                                                                     scheduleSourceDirectoryClose()
                                                                                 }
-                                                                            }}><span
+                                                                            }}><span><BrowseLink to={sourceHref(selectedDocument?.id, node.id)} onFollow={() => { setSource(node.id); setTracePopoverNodeId(node.id); setSourceDirectoryOpen(true) }}
             className="source-tree-title">{node.number && node.number !== "PREAMBLE" ? `${node.number} ` : ""}{node.title}{sourceCounts.get(node.id) ?
-            <Badge count={sourceCounts.get(node.id)} className="trace-count"/> : null}</span></Popover>),
+            <Badge count={sourceCounts.get(node.id)} className="trace-count"/> : null}</BrowseLink></span></Popover>),
         sourceNodeMap = new Map((selectedDocument?.nodes || []).map(node => [node.id, node])),
         isInsideCollapsedNode = (collapsedId: string, nodeId: string) => {
             let currentId: string | undefined = nodeId;
@@ -1215,6 +1226,7 @@ function Review() {
             }
             return false
         };
+    useProjectPageTitle(data.data?.project.name, "需求评审");
     if (data.isLoading) return <Spin fullscreen/>;
     if (data.error) return <Shell backTo={`/projects/${id}`}><Alert type="error" message="评审数据加载失败"
                                                                     description={data.error.message}/></Shell>;
@@ -1232,7 +1244,8 @@ function Review() {
         <Select style={{width: "100%"}} value={documentId} onChange={value => {
             setTracePopoverNodeId(undefined);
             setDocumentId(value);
-            setSource(undefined)
+            setSource(undefined);
+            navigate(sourceHref(value))
         }} options={data.data?.documents.map(item => ({value: item.id, label: item.name}))}/>
         {selectedDocument?.parseStatus === "FAILED" &&
             <Alert type="error" message="DOCX结构解析失败" description={selectedDocument.parseError}/>}<Tree blockNode
@@ -1244,7 +1257,7 @@ function Review() {
                                                                                                                  if (!info.expanded && tracePopoverNodeId && isInsideCollapsedNode(String(info.node.key), tracePopoverNodeId)) setTracePopoverNodeId(undefined)
                                                                                                              }}
                                                                                                              onSelect={keys => {
-                                                                                                                 setSource(String(keys[0] || ""));
+                                                                                                                 if (keys[0]) navigate(sourceHref(documentId, String(keys[0])));
                                                                                                                  setTimeout(() => {
                                                                                                                      if (!tracePopoverNodeIdRef.current) setSourceDirectoryOpen(false)
                                                                                                                  }, 50)
@@ -1253,18 +1266,18 @@ function Review() {
     const sourceDocument = <main className="document docx-pane review-document-pane"><DocxPreview
         documentId={documentId} nodes={selectedDocument?.nodes || []} activeNodeId={activeSourceNodeId}
         navigationKey={sourceNavigationKey}
-        onNodeClick={setSource}/></main>;
+        nodeHref={nodeId => sourceHref(documentId, nodeId)} onNodeClick={nodeId => { setSource(nodeId); navigate(sourceHref(documentId, nodeId)) }}/></main>;
     const requirementDirectory = <aside className="tree-pane review-tree-pane"><Typography.Title
         level={5}>测试需求目录</Typography.Title><Tree blockNode showLine treeData={requirementTree}
                                                        selectedKeys={selectedRequirement ? [selectedRequirement.id] : []}
                                                        defaultExpandAll
-                                                       onSelect={keys => gotoRequirement(String(keys[0] || ""))}/>{generationTail}
+                                                       onSelect={keys => { if (keys[0]) { gotoRequirement(String(keys[0])); navigate(requirementHref(String(keys[0]))) } }}/>{generationTail}
     </aside>;
     const requirementDocument = <main ref={requirementDocumentRef} className="document requirement-pane review-document-pane"
         onChangeCapture={documentEditing ? recordEditActivity : undefined}
         onBlurCapture={documentEditing ? stopEditActivity : undefined}><Phase2DocumentRenderer
         chapters={data.data?.phase2Document?.chapters || []} links={data.data?.links || []}
-        activeId={selectedRequirement?.id} onSource={gotoSource} onEvaluate={openEvaluation} evaluationDisabled={generationActive}
+        activeId={selectedRequirement?.id} sourceHref={link => sourceHref(link.sourceNode.document?.id, link.sourceNodeId)} onSource={gotoSource} onEvaluate={openEvaluation} evaluationDisabled={generationActive}
         reviewScores={reviewScores} editing={documentEditing} drafts={editorDrafts}
         onDraft={(binding, value) => { if (interactionLocked) return; recordEditActivity(); setEditorDrafts(current => ({...current, [binding.edit_key]: value})) }}
         onEditSources={binding => {
@@ -1467,8 +1480,7 @@ function Review() {
                 disabled: interactionLocked || generationActive,
                 onClick: () => { setPendingAttention(false); setReviewCenterOpen(true) }
             }, {
-                key: "diff", label: "变更分析", disabled: interactionLocked || generationActive,
-                onClick: () => navigate(`/projects/${id}/requirement-diff`)
+                key: "diff", label: <BrowseLink to={`/projects/${id}/requirement-diff`} disabled={interactionLocked || generationActive}>变更分析</BrowseLink>, disabled: interactionLocked || generationActive
             }]}}><Button icon={<EllipsisOutlined/>} disabled={interactionLocked}>更多</Button></Dropdown>
         </> : <>
             <Button disabled={interactionLocked} onClick={() => { stopEditActivity(); clearEditingDraft() }}>放弃修改</Button>
@@ -1478,7 +1490,7 @@ function Review() {
         </>}</Space>
     </div>;
     const confirmLeavingEditor = () => !documentEditing || window.confirm("有表单仍未提交，确定要离开当前页面吗？");
-    return <Shell className="review-shell" backTo={`/projects/${id}`} backLabel="返回生成进度" beforeLeave={confirmLeavingEditor}>{reviewMessageContext}
+    return <Shell projectName={data.data?.project.name} backTooltip={data.data?.project.name ? `返回「${data.data.project.name}」的生成进度` : undefined} className="review-shell" backTo={`/projects/${id}`} backLabel="返回生成进度" beforeLeave={confirmLeavingEditor}>{reviewMessageContext}
         {requestedChapter && !validRequestedChapter && <Alert className="phase2-generation-banner" type="warning" showIcon
             message="无法识别指定的测试需求章节" description="已显示当前可用的第一个章节。"/>}
         {requestedChapter && validRequestedChapter && !requestedChapterAvailable && <Alert className="phase2-generation-banner" type="info" showIcon
@@ -1506,6 +1518,7 @@ function Review() {
         </div>
         <EvaluationWindow open={evalOpen} loading={saveReview.isPending}
                           subject={evaluationTarget ? `${evaluationTarget.number ? `${evaluationTarget.number} ` : ""}${evaluationTarget.title}` : undefined}
+                          subjectHref={evaluationTargetId ? requirementHref(evaluationTargetId) : undefined}
                           onSubjectClick={evaluationTargetId ? () => gotoRequirement(evaluationTargetId) : undefined}
                           onCancel={() => setEvalOpen(false)}
                           onSave={() => saveReview.mutate()}>
@@ -1682,8 +1695,8 @@ function Review() {
                     <h3>{group.title}<Tag>{group.items.length}</Tag></h3>
                     {group.items.map(item => <div key={item.id}
                         className={`review-center-item${item.review ? " is-reviewed" : " is-pending"}${pendingAttention && !item.review ? " needs-attention" : ""}`}
-                        onClick={() => gotoReviewItem(item.id)}>
-                        <div className="review-center-item-main">
+                        >
+                        <BrowseLink to={requirementHref(item.id)} onFollow={() => gotoReviewItem(item.id)} className="review-center-item-main">
                             <div className="review-center-item-title"><span>{item.number || "未编号"}</span>{item.title}</div>
                             {item.review ? <div className="review-center-item-meta">
                                 <Tag color="blue">{item.review.weightedScore.toFixed(2)}</Tag>
@@ -1693,7 +1706,7 @@ function Review() {
                                     <span className="review-center-comment">{item.review.comment}</span>
                                 </Tooltip>}
                             </div> : <Tag color="orange">待评</Tag>}
-                        </div>
+                        </BrowseLink>
                         <Button className="review-center-item-action" size="small"
                                 type={item.review ? "default" : "primary"} onClick={event => {
                             event.stopPropagation();

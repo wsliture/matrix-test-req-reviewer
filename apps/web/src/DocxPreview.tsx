@@ -1,3 +1,4 @@
+import {isPlainNavigation} from "./navigation";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {renderAsync} from "docx-preview";
 import {Alert, Button, Space, Spin, Tooltip} from "antd";
@@ -8,13 +9,16 @@ const normalized = (value: string) => value.replace(/\s+/g, "").toLowerCase();
 const MIN_SCALE = 0.4, MAX_SCALE = 1.5, SCALE_STEP = 0.1;
 type ZoomMode = "fit" | "manual";
 
-export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onNodeClick}: {
+export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onNodeClick, nodeHref}: {
     documentId?: string;
     nodes: DocumentNode[];
     activeNodeId?: string;
     navigationKey?: number;
     onNodeClick: (id: string) => void;
+    nodeHref?: (id: string) => string;
 }) {
+    const navigationRef = useRef({nodeHref, onNodeClick});
+    navigationRef.current = {nodeHref, onNodeClick};
     const shell = useRef<HTMLDivElement>(null), container = useRef<HTMLDivElement>(null);
     const naturalSize = useRef({width: 0, height: 0});
     const [loading, setLoading] = useState(false), [error, setError] = useState<string>();
@@ -78,7 +82,16 @@ export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onN
                 used.add(element);
                 element.dataset.sourceNodeId = node.id;
                 element.classList.add("source-anchor");
-                element.addEventListener("click", () => onNodeClick(node.id))
+                const anchor = document.createElement("a");
+                anchor.className = "source-heading-link";
+                anchor.href = navigationRef.current.nodeHref?.(node.id) || "#";
+                while (element.firstChild) anchor.appendChild(element.firstChild);
+                element.appendChild(anchor);
+                anchor.addEventListener("click", event => {
+                    if (!isPlainNavigation(event)) return;
+                    event.preventDefault();
+                    navigationRef.current.onNodeClick(node.id);
+                });
             }
         }).catch(reason => !disposed && setError(reason instanceof Error ? reason.message : String(reason)))
             .finally(() => !disposed && setLoading(false));
@@ -86,6 +99,12 @@ export function DocxPreview({documentId, nodes, activeNodeId, navigationKey, onN
             disposed = true
         }
     }, [documentId, nodes, fitToWidth]);
+    useEffect(() => {
+        container.current?.querySelectorAll<HTMLElement>("[data-source-node-id]").forEach(element => {
+            const anchor = element.querySelector<HTMLAnchorElement>("a.source-heading-link");
+            if (anchor && nodeHref) anchor.href = nodeHref(element.dataset.sourceNodeId!);
+        });
+    }, [nodeHref, loading]);
     useEffect(() => {
         if (!shell.current) return;
         const observer = new ResizeObserver(() => {

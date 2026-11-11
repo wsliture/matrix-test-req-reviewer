@@ -1,3 +1,4 @@
+import {BrowseLink} from "./navigation";
 import {createElement, useCallback, useEffect, useRef, useState} from "react";
 import {Alert, Button, Input, Modal, Popconfirm, Select, Tag, Tooltip} from "antd";
 import {AuditOutlined, DeleteOutlined, EditOutlined, PlusOutlined, QuestionCircleOutlined} from "@ant-design/icons";
@@ -14,6 +15,7 @@ type Props = {
     selectedEntityUid?: string;
     reviewScores?: Record<string, number>;
     onSource: (link: TraceLink) => void;
+    sourceHref?: (link: TraceLink) => string;
     onEvaluate: (targetId: string) => void;
     editing?: boolean;
     drafts?: Record<string, unknown>;
@@ -49,10 +51,11 @@ const tableOption = (values: SourceTableOption[] | undefined, key: string) => {
     return index.get(key)
 };
 
-function TraceSourceLinks({targetId, links, onSource, inline = false, editing, binding, onEditSources, drafts, availableSourceRefs, annotation}: {
+function TraceSourceLinks({targetId, links, onSource, sourceHref, inline = false, editing, binding, onEditSources, drafts, availableSourceRefs, annotation}: {
     targetId?: string;
     links: TraceLink[];
     onSource: (link: TraceLink) => void;
+    sourceHref?: (link: TraceLink) => string;
     inline?: boolean; editing?: boolean; binding?: Phase2EditBinding; onEditSources?: (binding: Phase2EditBinding) => void;
     drafts?: Record<string, unknown>; availableSourceRefs?: SourceRefOption[]; annotation?: RequirementDiffAnnotation
 }) {
@@ -78,11 +81,12 @@ function TraceSourceLinks({targetId, links, onSource, inline = false, editing, b
         }) : diffRefs ? diffRefs.map(sourceRef => {
             const link = linkByRef.get(sourceRef), changed = !counterpart.has(sourceRef);
             return <Tag color={diffColor(sourceRef)} key={sourceRef} className={changed ? annotation?.side === "before" ? "diff-trace-delete" : "diff-trace-insert" : undefined}>
-                {link ? `${link.sourceNode.document?.name?.replace(/\.docx$/i, "") || ""} ${link.sourceNode.number || link.sourceNode.title}`.trim() : sourceRef}
+                {link && sourceHref ? <BrowseLink to={sourceHref(link)} onFollow={() => onSource(link)}>{`${link.sourceNode.document?.name?.replace(/\.docx$/i, "") || ""} ${link.sourceNode.number || link.sourceNode.title}`.trim()}</BrowseLink> : sourceRef}
                 {changed ? `（${annotation?.side === "before" ? "删除" : "新增"}）` : ""}
             </Tag>
-        }) : values.map(link => <Tag color="blue" key={link.id} className={editing && binding ? "phase2-editable-source" : ""} onClick={() => editing && binding && onEditSources ? onEditSources(binding) : onSource(link)}>
-            {link.sourceNode.document?.name.replace(/\.docx$/i, "")} {link.sourceNode.number || link.sourceNode.title}
+        }) : values.map(link => <Tag color="blue" key={link.id} className={editing && binding ? "phase2-editable-source" : ""} onClick={editing && binding ? openEditor : undefined}>
+            {editing && binding || !sourceHref ? <span>{link.sourceNode.document?.name.replace(/\.docx$/i, "")} {link.sourceNode.number || link.sourceNode.title}</span> :
+                <BrowseLink to={sourceHref(link)} onFollow={() => onSource(link)}>{link.sourceNode.document?.name.replace(/\.docx$/i, "")} {link.sourceNode.number || link.sourceNode.title}</BrowseLink>}
         </Tag>)}
         {diffRefs?.length === 0 && annotation?.changedFields?.includes("sourceRefs") && <Tag>无</Tag>}
     </Wrapper>
@@ -217,7 +221,7 @@ function DiffText({annotation, businessId}: {annotation: RequirementDiffAnnotati
         {visible.map((segment, index) => <span key={index} className={segment.type === "DELETE" ? "diff-text-delete" : segment.type === "INSERT" ? "diff-text-insert" : undefined}>{segment.text}</span>)}</>
 }
 
-function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, availableTables, availableSourceRefs, chapterWarning}: {
+function Block({block, links, activeId, mode = "review", annotation, diffAnnotationsByNode, selectedEntityUid, reviewScores, onSource, sourceHref, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, availableTables, availableSourceRefs, chapterWarning}: {
     block: Phase2Block;
     links: TraceLink[];
     activeId?: string;
@@ -227,6 +231,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     selectedEntityUid?: string;
     reviewScores?: Record<string, number>;
     onSource: Props["onSource"];
+    sourceHref?: Props["sourceHref"];
     onEvaluate: Props["onEvaluate"]
     editing?: boolean; drafts?: Record<string, unknown>; onDraft?: Props["onDraft"]; onEditSources?: Props["onEditSources"];
     onEditTables?: Props["onEditTables"]; tableOperations?: Phase2TableOperation[]; onTableOperation?: Props["onTableOperation"];
@@ -459,11 +464,11 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
                             disabled={readOnly || evaluationDisabled} onClick={() => onEvaluate(block.anchorId!)}>
                         内容质量评估{reviewScores?.[block.anchorId] !== undefined ? ` · 已评 ${reviewScores[block.anchorId].toFixed(2)}` : ""}
                     </Button>}</div></div>
-            <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} editing={editing} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
+            <TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} sourceHref={sourceHref} editing={editing} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
         </section>
     }
     if (block.type === "paragraph") return <div {...anchorProps} className={`phase2-paragraph${active}${diffClass}${pendingRequirementDelete ? " phase2-requirement-pending-delete" : ""}`}>
-        <p>{annotation && block.businessId && annotation.nodeType === "requirement" ? <DiffText annotation={annotation} businessId={block.businessId}/> : renderParts(block.parts, block.text, {editing: editing && !pendingRequirementDelete, drafts, onDraft, annotation})}<TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} inline editing={editing && !pendingRequirementDelete} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
+        <p>{annotation && block.businessId && annotation.nodeType === "requirement" ? <DiffText annotation={annotation} businessId={block.businessId}/> : renderParts(block.parts, block.text, {editing: editing && !pendingRequirementDelete, drafts, onDraft, annotation})}<TraceSourceLinks targetId={block.anchorId} links={links} onSource={onSource} sourceHref={sourceHref} inline editing={editing && !pendingRequirementDelete} binding={block.sourceBinding} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={annotation}/>
             {editing && block.requirementKey && block.requirementBinding && <Button className="phase2-requirement-delete" type="text" danger size="small" icon={<DeleteOutlined/>}
                 onClick={() => onRequirementOperation?.({container_key: block.requirementBinding!.container_key, operation: "delete_requirement", requirement_key: block.requirementKey})}>{pendingRequirementDelete ? "撤销删除" : "删除 TR"}</Button>}</p></div>;
     if (block.type === "list") return <div className="phase2-list">{block.items?.map((item, index) => <p
@@ -551,7 +556,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
                         values[rowIndex] = value;
                         onTableOperation?.({...addedColumn, initial_value: {...draft, values}})
                     }}/> : block.cellBindings?.[rowIndex]?.[index] ? <EditablePart part={{text: cell, editable: true, binding: block.cellBindings[rowIndex][index]!}} editing={editing && !requirementPendingDelete && !columnPendingDelete} drafts={drafts} onDraft={onDraft} tableCell annotation={annotation}/> : cell}{index === 1 && rowId ?
-                        <TraceSourceLinks targetId={rowId} links={links} onSource={onSource} inline editing={editing && !requirementPendingDelete} binding={block.rowSourceBindings?.[rowIndex]} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={rowAnnotation}/> : null}
+                        <TraceSourceLinks targetId={rowId} links={links} onSource={onSource} sourceHref={sourceHref} inline editing={editing && !requirementPendingDelete} binding={block.rowSourceBindings?.[rowIndex]} onEditSources={onEditSources} drafts={drafts} availableSourceRefs={availableSourceRefs} annotation={rowAnnotation}/> : null}
                         {editing && !added && index === row.length - 1 && block.rowRequirementKeys?.[rowIndex] && block.requirementBinding && (
                             <Button className="phase2-table-row-delete" type="text" danger size="small" title={requirementPendingDelete ? "撤销删除" : "删除TR"} icon={<DeleteOutlined/>}
                                 onClick={() => onRequirementOperation?.({container_key: block.requirementBinding!.container_key, operation: "delete_requirement", requirement_key: block.rowRequirementKeys![rowIndex]})}>{requirementPendingDelete ? "撤销" : ""}</Button>
@@ -570,7 +575,7 @@ function Block({block, links, activeId, mode = "review", annotation, diffAnnotat
     </div>
 }
 
-export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, interactionLocked, availableTables, availableSourceRefs}: Props) {
+export function Phase2DocumentRenderer({chapters, links, activeId, mode = "review", diffAnnotations = [], selectedEntityUid, reviewScores, onSource, sourceHref, onEvaluate, editing, drafts, onDraft, onEditSources, onEditTables, tableOperations, onTableOperation, requirementOperations, onRequirementOperation, referenceOperations, onReferenceOperation, onEditActivityEnd, readOnly, evaluationDisabled, interactionLocked, availableTables, availableSourceRefs}: Props) {
     const documentRef = useRef<HTMLElement>(null);
     useEffect(() => {
         if (interactionLocked && documentRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement)?.blur()
@@ -597,7 +602,7 @@ export function Phase2DocumentRenderer({chapters, links, activeId, mode = "revie
             {chapter.blocks.map((block, index) => <Block key={`${chapter.artifact}-${index}`} block={block}
                                                          chapterWarning={chapterWarningForBlock(chapter, index)}
                                                          links={links} activeId={activeId} mode={mode} annotation={annotationForBlock(block)} diffAnnotationsByNode={annotationsByNode} selectedEntityUid={selectedEntityUid} reviewScores={reviewScores}
-                                                         onSource={onSource} onEvaluate={onEvaluate} editing={editing} drafts={drafts} onDraft={onDraft} onEditSources={onEditSources} onEditTables={onEditTables} tableOperations={tableOperations} onTableOperation={onTableOperation}
+                                                         onSource={onSource} sourceHref={sourceHref} onEvaluate={onEvaluate} editing={editing} drafts={drafts} onDraft={onDraft} onEditSources={onEditSources} onEditTables={onEditTables} tableOperations={tableOperations} onTableOperation={onTableOperation}
                                                          requirementOperations={requirementOperations} onRequirementOperation={onRequirementOperation}
                                                          referenceOperations={referenceOperations} onReferenceOperation={onReferenceOperation}
                                                          onEditActivityEnd={onEditActivityEnd}

@@ -20,6 +20,29 @@ html, body, #root {
     flex: none
 }
 
+.header > b, .header .header-back {
+    flex: none;
+    white-space: nowrap;
+}
+
+.header-project {
+    display: block;
+    min-width: 0;
+    max-width: 360px;
+    flex: 0 1 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255, 255, 255, .75);
+    font-size: 14px;
+    line-height: 24px;
+}
+
+.header-project:focus-visible {
+    outline: 2px solid #91caff;
+    outline-offset: 3px;
+}
+
 .account-menu-trigger.ant-btn {
     display: inline-grid;
     place-items: center;
@@ -2944,4 +2967,63 @@ html, body, #root {
 .project-heading-hint,
 .ant-upload-wrapper .ant-upload-drag p.project-heading-hint {
     color: #ff4d4f;
+}
+
+/* Native navigation links retain the existing card, tree and document presentation. */
+a.chapter-status-row, a.diff-change-item, a.review-center-item-main, a.source-tree-title,
+a.source-heading-link, a.trace-target-link, a.project-card-link {
+    color: inherit;
+    text-decoration: none;
+}
+
+a.chapter-status-row, a.diff-change-item {
+    cursor: pointer;
+}
+
+.chapter-status-row[aria-disabled="true"] {
+    cursor: default;
+}
+
+.project-link-card {
+    position: relative;
+}
+
+.project-card-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+}
+
+.project-link-card [data-project-action] {
+    position: relative;
+    z-index: 1;
+}
+
+.trace-target-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+a.source-heading-link {
+    display: block;
+}
+
+a.browse-link:focus-visible, a.source-heading-link:focus-visible {
+    outline: 2px solid #1677ff;
+    outline-offset: 2px;
+}
+
+/* Keep navigation text in the surrounding component's original palette. */
+.requirement-tree-link, .requirement-tree-link:is(:hover, :active, :visited),
+.debug-file-link, .debug-file-link:is(:hover, :active, :visited) {
+    color: inherit;
+    text-decoration: none;
+}
+
+.trace-source-links .ant-tag a.browse-link,
+.trace-source-links .ant-tag a.browse-link:is(:hover, :active, :visited) {
+    color: inherit;
+    text-decoration: none;
 }
