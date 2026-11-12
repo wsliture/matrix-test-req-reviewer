@@ -75,6 +75,7 @@ echo "[3/8] 导入新版本ARM64镜像..."
 docker load -i "$SOURCE_DIR/requirements-manager-arm64-images.tar"
 
 echo "[4/8] 停止旧服务（保留全部数据）..."
+# 必须在替换Compose前执行，确保旧版包含的MinIO也被停止并移除。
 "$TARGET_DIR/stop.sh"
 services_stopped=1
 
@@ -124,7 +125,8 @@ echo "[8/8] 等待核心服务进入运行状态..."
 attempt=0
 while [ "$attempt" -lt 36 ]; do
   infrastructure_healthy=1
-  for service_name in postgres redis minio; do
+  # OpenCode容器还运行runner；仅检查running不能证明两个服务已就绪。
+  for service_name in postgres redis opencode; do
     service_container=$("$TARGET_DIR/compose.sh" ps -q "$service_name" 2>/dev/null || true)
     service_health=""
     if [ -n "$service_container" ]; then

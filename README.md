@@ -24,7 +24,6 @@
 | OpenCode | OpenCode Server + Matrix插件 | 容器内`4096` | 执行 `/matrix-phase2` |
 | PostgreSQL | PostgreSQL 16 | `5432` | 项目、任务、评审、目录和追溯数据 |
 | Redis | Redis 7 | 仅容器网络 | BullMQ任务队列 |
-| MinIO | MinIO | 控制台`9001` | 项目文件对象存储 |
 
 ## 目录结构
 
@@ -45,7 +44,7 @@ requirements-manager/
 
 ## 环境要求
 
-推荐使用 Docker Compose 部署，避免本机分别配置 PostgreSQL、Redis、MinIO、OpenCode 和共享项目目录。
+推荐使用 Docker Compose 部署，避免本机分别配置 PostgreSQL、Redis、OpenCode 和共享项目目录。
 
 - Docker Desktop或Docker Engine 24+
 - Docker Compose v2
@@ -77,7 +76,6 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=请替换为强密码
 OPENCODE_USERNAME=opencode
 OPENCODE_PASSWORD=请替换为强密码
-MINIO_SECRET_KEY=请替换为强密码
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 ```
 
@@ -102,13 +100,12 @@ docker compose logs --tail=100 api worker opencode
 
 - 管理界面：<http://localhost:8080>
 - API：<http://localhost:3000/api>
-- MinIO控制台：<http://localhost:9001>
 
 使用 `.env` 中的 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录。
 
 ## Docker组件构建与部署
 
-生产镜像中的Web由Nginx提供静态页面，并将同源 `/api/` 请求代理到API服务。开发Compose仍保留API、PostgreSQL和MinIO调试端口；ARM离线Compose只向宿主机发布Web的 `8089` 端口。
+生产镜像中的Web由Nginx提供静态页面，并将同源 `/api/` 请求代理到API服务。开发Compose仍保留API、PostgreSQL调试端口；ARM离线Compose只向宿主机发布Web的 `8089` 端口。
 
 ### 构建全部或单个组件
 
@@ -205,7 +202,7 @@ npx vitest run apps/api/tests/archive.test.ts
 推荐让API及基础设施运行在Docker中，只在宿主机启动Vite：
 
 ```bash
-docker compose up -d postgres redis minio opencode api worker
+docker compose up -d postgres redis opencode api worker
 npm run dev:web
 ```
 
@@ -227,12 +224,9 @@ WEB_ORIGIN=http://localhost:5173
 
 ## ARM64离线部署
 
-项目支持在x86开发机上交叉构建Linux ARM64离线部署包。打包机需要Docker Buildx并可访问Docker Hub、GHCR、npm和GitHub；目标服务器只需要Docker Engine，不需要网络或预装Compose。
+项目支持在x86开发机上交叉构建Linux ARM64离线部署包。打包机需要Docker Buildx并可访问Docker Hub、npm和GitHub；目标服务器只需要Docker Engine，不需要网络或预装Compose。
 
-开发和离线构建统一使用Coollabs第三方镜像 `ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`，
-固定版本而非 `latest`。开发环境首次切换时，先备份MinIO数据卷，再执行
-`docker compose pull minio` 和 `docker compose up -d minio`；保留原数据卷，勿使用 `down -v`。
-离线部署继续使用 `requirements-manager-minio:arm64` 本地标签，已有服务器先备份，再按现有离线升级流程操作。
+当前使用共享项目文件系统，不部署MinIO。旧版离线部署请从新包目录执行 `./upgrade.sh /旧部署目录`；脚本保留旧数据和配置。
 
 ### 1. 在x86开发机生成离线包
 
@@ -243,9 +237,9 @@ cd requirements-manager
 ./scripts/build-arm64-offline.ps1
 ```
 
-首次切换使用上述完整构建命令。后续本地第三方镜像齐全且MinIO版本正确时，可执行
+首次打包使用上述完整构建命令。后续本地PostgreSQL、Redis第三方镜像齐全时，可执行
 `./scripts/build-arm64-offline.ps1 -ReuseLocalThirdPartyImages`，仍会构建最新应用代码。
-脚本会拒绝复用旧版MinIO。`-SkipBuild` 仅适用于应用镜像已构建且代码未变的继续打包场景，
+`-SkipBuild` 仅适用于应用镜像已构建且代码未变的继续打包场景，
 更新代码后不要使用它。
 
 如需使用代理，先为当前终端设置代理环境变量，Docker Desktop也需要配置可访问的构建代理：
@@ -284,7 +278,7 @@ vi data/opencode-config/opencode.json
 ./status.sh
 ```
 
-浏览器访问 `http://服务器IP:8089`。ARM离线配置只发布 `8089:80`，API、PostgreSQL、Redis、MinIO和OpenCode不映射宿主机端口。
+浏览器访问 `http://服务器IP:8089`。ARM离线配置只发布 `8089:80`，API、PostgreSQL、Redis和OpenCode不映射宿主机端口。
 
 ### 3. 离线服务运维
 
@@ -412,9 +406,6 @@ Reviewer可以填写修改建议。评分按可评估章节独立保存，不对
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL连接串 | `postgresql://matrix:matrix@postgres:5432/matrix_requirements` |
 | `REDIS_URL` | Redis连接串 | `redis://redis:6379` |
-| `MINIO_ENDPOINT` | MinIO API地址 | `http://minio:9000` |
-| `MINIO_ACCESS_KEY` | MinIO账号 | `matrix` |
-| `MINIO_SECRET_KEY` | MinIO密码 | 必须修改 |
 | `JWT_SECRET` | 登录令牌签名密钥 | 至少32字符 |
 | `ADMIN_USERNAME` | 初始管理员名 | `admin` |
 | `ADMIN_PASSWORD` | 初始管理员密码 | 必须修改 |
@@ -436,7 +427,6 @@ Reviewer可以填写修改建议。评分按可评估章节独立保存，不对
 | --- | --- |
 | `postgres-data` | 数据库数据 |
 | `redis-data` | 队列数据 |
-| `minio-data` | MinIO对象数据 |
 | `projects` | 源文档和项目 `.matrix` 工件 |
 | `opencode-config` | OpenCode运行配置和重启信号 |
 
@@ -475,19 +465,10 @@ docker compose logs -f worker opencode
 
 按“使用网络代理构建”配置宿主机代理和Docker构建参数。容器访问宿主机代理时应使用 `host.docker.internal`，而不是 `127.0.0.1`。
 
-### MinIO容器未启动
-
-```bash
-docker compose logs --tail=100 minio
-docker compose up -d minio
-```
-
-确认MinIO密码满足要求，并检查 `9001` 端口是否被占用。
-
 ## 安全建议
 
-- 首次启动后立即修改管理员、MinIO和OpenCode密码。
+- 首次启动后立即修改管理员和OpenCode密码。
 - 使用随机且足够长的 `JWT_SECRET`。
 - 不要提交 `.env`、OpenCode配置卷或项目源文档。
-- 生产环境不要直接暴露PostgreSQL、MinIO控制台和API端口，应通过反向代理和访问控制发布服务。
-- 定期备份 `postgres-data`、`projects`、`minio-data` 和 `opencode-config`。
+- 生产环境不要直接暴露PostgreSQL和API端口，应通过反向代理和访问控制发布服务。
+- 定期备份 `postgres-data`、`projects` 和 `opencode-config`。

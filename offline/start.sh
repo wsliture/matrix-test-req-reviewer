@@ -6,7 +6,7 @@ cd "$BASE_DIR"
 
 [ -f .env ] || { echo "错误：缺少.env，请先执行 ./install.sh" >&2; exit 1; }
 
-required_vars="POSTGRES_PASSWORD MINIO_ACCESS_KEY MINIO_SECRET_KEY JWT_SECRET OPENCODE_USERNAME OPENCODE_PASSWORD ADMIN_USERNAME ADMIN_PASSWORD WEB_ORIGIN"
+required_vars="POSTGRES_PASSWORD JWT_SECRET OPENCODE_USERNAME OPENCODE_PASSWORD ADMIN_USERNAME ADMIN_PASSWORD WEB_ORIGIN"
 for name in $required_vars; do
   value=$(sed -n "s/^${name}=//p" .env | tail -n 1)
   if [ -z "$value" ] || printf '%s' "$value" | grep -qi 'replace-with'; then

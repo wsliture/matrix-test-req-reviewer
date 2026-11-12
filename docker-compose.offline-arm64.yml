@@ -30,22 +30,6 @@ services:
       retries: 30
     restart: unless-stopped
 
-  minio:
-    image: requirements-manager-minio:arm64
-    pull_policy: never
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?请在.env中设置MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?请在.env中设置MINIO_SECRET_KEY}
-    volumes:
-      - ./data/minio:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-    restart: unless-stopped
-
   opencode:
     image: requirements-manager-opencode:arm64
     pull_policy: never
@@ -74,7 +58,6 @@ services:
     environment:
       DATABASE_URL: postgresql://matrix:${POSTGRES_PASSWORD}@postgres:5432/matrix_requirements
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: http://minio:9000
       OPENCODE_URL: http://opencode:4096
       MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
       PROJECTS_ROOT: /data/projects
@@ -83,8 +66,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       opencode:
         condition: service_healthy
@@ -100,7 +81,6 @@ services:
     environment:
       DATABASE_URL: postgresql://matrix:${POSTGRES_PASSWORD}@postgres:5432/matrix_requirements
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: http://minio:9000
       OPENCODE_URL: http://opencode:4096
       PROJECTS_ROOT: /data/projects
       OPENCODE_CONFIG_PATH: /opencode-config/opencode.json
@@ -109,8 +89,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       opencode:
         condition: service_healthy

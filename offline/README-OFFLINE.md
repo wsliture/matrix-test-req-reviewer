@@ -10,24 +10,18 @@
 
 ## Windows构建机打包
 
-开发和离线包统一使用Coollabs第三方镜像
-`ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`（固定版本，非MinIO官方发布镜像）。
-离线部署仍使用本地标签 `requirements-manager-minio:arm64`，服务器不需要访问GHCR。
-
-首次构建或从旧MinIO切换时，在 `requirements-manager` 目录执行：
+首次构建时，在 `requirements-manager` 目录执行：
 
 ```powershell
 .\scripts\build-arm64-offline.ps1
 ```
 
-该命令重新构建应用及第三方镜像。后续可以使用下面的复用命令；如果本地MinIO仍是旧版本，
-脚本会拒绝打包并提示重新获取。已有部署升级前必须备份数据，从新包目录运行现有
-`./upgrade.sh /旧部署目录` 流程，不要删除或覆盖旧数据目录。
+离线包包含Web、API、Worker、OpenCode、PostgreSQL、Redis六个服务，文件使用共享目录存储。
 
 ### 更新代码后构建离线包（推荐）
 
-如果本地已有三个 `requirements-manager-postgres:arm64`、
-`requirements-manager-redis:arm64`、`requirements-manager-minio:arm64` 镜像，可在
+如果本地已有两个 `requirements-manager-postgres:arm64`、
+`requirements-manager-redis:arm64` 镜像，可在
 `requirements-manager` 目录执行：
 
 ```powershell
@@ -35,9 +29,9 @@
 ```
 
 该命令会从当前代码重新构建API、Worker、Web、OpenCode四个应用镜像，再生成离线包，
-确保代码更新进入交付镜像。`-ReuseLocalThirdPartyImages` 只复用本地PostgreSQL、Redis、MinIO
-第三方镜像，不会跳过应用镜像构建。脚本会检查镜像的ARM64架构，并验证MinIO和mc可运行；
-缺失镜像、架构不匹配或MinIO版本不是指定的10月版本会报错。
+确保代码更新进入交付镜像。`-ReuseLocalThirdPartyImages` 只复用本地PostgreSQL、Redis
+第三方镜像，不会跳过应用镜像构建。脚本会检查镜像的ARM64架构；
+缺失镜像、架构不匹配会报错。
 本地镜像应来自可信来源；Compose二进制已缓存时会自动复用。
 
 ### 应用镜像已构建完成后继续打包
@@ -94,7 +88,7 @@ COOKIE_SECURE=false
 ./stop.sh           # 停止服务并保留数据
 ```
 
-启动后访问 `http://服务器IP:8089`。API、PostgreSQL、Redis、MinIO和OpenCode均只在容器内部网络通信，不应在防火墙上开放对应端口。
+启动后访问 `http://服务器IP:8089`。API、PostgreSQL、Redis和OpenCode均只在容器内部网络通信，不应在防火墙上开放对应端口。
 
 ## 数据与备份
 
@@ -102,8 +96,7 @@ COOKIE_SECURE=false
 
 - `data/postgres`：账号、项目和评审数据
 - `data/redis`：任务队列
-- `data/minio`：上传文件和导出工件
-- `data/projects`：源文档及Matrix运行工件
+- `data/projects`：上传文件、源文档、导出文件、历史快照及Matrix运行工件
 - `data/opencode-config`：OpenCode运行配置
 
 备份前建议执行 `./stop.sh`，然后整体备份 `data/` 和 `.env`。
@@ -127,11 +120,15 @@ chmod +x ./*.sh bin/docker-compose
 1. 校验新离线包的SHA256。
 2. 在旧PostgreSQL仍运行时生成一致的 `pg_dump` 逻辑备份。
 3. 导入新版本镜像。
-4. 停止旧容器，但不删除数据卷或宿主机数据。
+4. 使用旧Compose停止旧容器（包括旧MinIO），但不删除数据卷或宿主机数据。
 5. 归档旧部署的整个 `data/` 和 `.env`。
 6. 仅更新Compose、管理脚本和运行文件，保留旧 `.env`、项目数据和OpenCode配置。
 7. 启动新版；API启动时自动执行数据库迁移。
-8. 等待PostgreSQL、Redis、MinIO、OpenCode、API、Worker和Web全部进入运行状态。
+8. 等待PostgreSQL、Redis、OpenCode健康，且API、Worker、Web均正常运行。
+
+新版不再部署或打包MinIO。旧 `.env` 中的 `MINIO_*` 变量可保留，不影响新版启动；旧 `data/minio` 会完整备份并原样保留，无需手动清理。升级不会删除旧MinIO镜像，以便回退。
+
+升级必须使用新包中的 `upgrade.sh`，不要运行旧目录遗留的升级脚本，也不要提前覆盖旧Compose；旧配置用于停止包括MinIO在内的旧服务。
 
 备份默认写入旧部署目录的同级目录：
 

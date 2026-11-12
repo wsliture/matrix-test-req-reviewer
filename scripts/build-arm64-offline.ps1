@@ -20,17 +20,6 @@ $DownloadCachePath = if ([System.IO.Path]::IsPathRooted($DownloadCacheDirectory)
 $ImagesArchive = Join-Path $OutputPath "requirements-manager-arm64-images.tar"
 $BundleArchive = "$OutputPath.tar.gz"
 $BuildProxyArguments = @()
-$MinioVersion = "RELEASE.2025-10-15T17-29-55Z"
-$MinioSource = "ghcr.io/coollabsio/minio:$MinioVersion"
-
-function Assert-MinioVersion {
-  $VersionOutput = & docker run --rm --platform linux/arm64 --entrypoint minio requirements-manager-minio:arm64 --version
-  if ($LASTEXITCODE -ne 0 -or ($VersionOutput -join "`n") -notmatch ("(?m)^minio version " + [regex]::Escape($MinioVersion) + "(?:\s|$)")) {
-    throw "MinIO镜像版本不匹配或无法运行，需要 $MinioVersion。请去掉-ReuseLocalThirdPartyImages重新构建，或执行 docker pull --platform linux/arm64 $MinioSource 后执行 docker tag $MinioSource requirements-manager-minio:arm64。检测结果：$VersionOutput"
-  }
-  Write-Host ($VersionOutput -join "`n")
-}
-
 if ($HostProxyUrl) {
   $env:HTTP_PROXY = $HostProxyUrl
   $env:HTTPS_PROXY = $HostProxyUrl
@@ -115,11 +104,6 @@ function Get-CachedArm64Download(
 Write-Host "检查Docker Buildx..."
 Invoke-Checked "docker" @("buildx", "version")
 
-if ($ReuseLocalThirdPartyImages) {
-  # Reject stale MinIO before spending time rebuilding application images.
-  Assert-MinioVersion
-}
-
 if (-not $SkipBuild) {
   Write-Host "构建ARM64 API镜像..."
   Invoke-Checked "docker" (@("buildx", "build", "--platform", "linux/arm64", "--load") + $BuildProxyArguments + @("--target", "api", "-t", "requirements-manager-api:arm64", "-f", (Join-Path $ProjectRoot "docker/app.Dockerfile"), $ProjectRoot))
@@ -136,10 +120,7 @@ if (-not $SkipBuild) {
 
 $ThirdPartyImageDefinitions = @(
   @{ Source = "postgres:16-alpine"; Target = "requirements-manager-postgres:arm64" },
-  @{ Source = "redis:7-alpine"; Target = "requirements-manager-redis:arm64" },
-  # Registry availability can change; verified local images can be reused via
-  # -ReuseLocalThirdPartyImages without resolving remote manifests.
-  @{ Source = $MinioSource; Target = "requirements-manager-minio:arm64" }
+  @{ Source = "redis:7-alpine"; Target = "requirements-manager-redis:arm64" }
 )
 foreach ($Definition in $ThirdPartyImageDefinitions) {
   if ($ReuseLocalThirdPartyImages) {
@@ -162,10 +143,6 @@ foreach ($Definition in $ThirdPartyImageDefinitions) {
     $ProjectRoot
   ))
 }
-
-Write-Host "验证ARM64 MinIO和健康检查客户端..."
-Assert-MinioVersion
-Invoke-Checked "docker" @("run", "--rm", "--platform", "linux/arm64", "--entrypoint", "mc", "requirements-manager-minio:arm64", "--version")
 
 $ApplicationImages = @(
   "requirements-manager-api:arm64",

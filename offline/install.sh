@@ -21,7 +21,7 @@ echo "校验离线包完整性..."
 sed 's/\r$//' SHA256SUMS | sha256sum -c -
 
 chmod +x bin/docker-compose ./*.sh
-mkdir -p data/postgres data/redis data/minio data/projects data/opencode-config
+mkdir -p data/postgres data/redis data/projects data/opencode-config
 
 if [ ! -f .env ]; then
   cp .env.example .env

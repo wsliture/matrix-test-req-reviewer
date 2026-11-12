@@ -90,7 +90,7 @@ API 提交编辑任务，Worker 调用父目录 `src/direct-phase2-runner.ts` �
 - 需求身份、业务编号、来源引用和版本关联影响追踪、评审与历史。调整编号或重新索引时检查 `entityUid`、`businessId`、`sourceRefs` 及 Review/Revision 的关联。
 - 编辑回滚备份在 `.matrix/history/rollback/`，发布快照在 `.matrix/history/revisions/`，两者不可混用。
 - 文件写入、数据库事务和 Redis 入队没有统一跨系统事务。变更时检查部分成功、入队失败、恢复失败及重复执行的结果。
-- Compose 中有 MinIO，但当前主要文件链路使用共享文件系统；不能仅根据 `Document.objectKey` 名称假定其为 S3 对象键。
+- 当前部署不包含 MinIO，文件链路使用共享文件系统；不能仅根据 `Document.objectKey` 名称假定其为 S3 对象键。
 
 ## 部署和配置
 
@@ -101,12 +101,13 @@ docker compose ps
 docker compose logs --tail=100 api worker opencode
 ```
 
-- 默认 Compose 包含 Web、API、Worker、OpenCode、PostgreSQL、Redis、MinIO。Web 默认主机端口 8080；API 3000；OpenCode 4096 和 runner 4097 在容器网络使用。
+- 默认 Compose 包含 Web、API、Worker、OpenCode、PostgreSQL、Redis。Web 默认主机端口 8080；API 3000；OpenCode 4096 和 runner 4097 在容器网络使用。
 - OpenCode 与 runner 同容器、不同进程。修改入口脚本时保留健康检查、runner 退出处理、OpenCode 重启与配置重载协调。
 - API、Worker、OpenCode 共享 `/data/projects`；持久化工作区路径依赖各进程一致的挂载路径。
 - `opencode-config` 是模型/插件配置共享卷，API 写配置，Worker 只读，OpenCode 入口处理重启请求。
 - Nginx `/api/` 代理需要支持 SSE 长连接；修改代理时核查缓冲、超时和事件刷新。
 - 离线 ARM64 Compose 与默认 Compose 的镜像、端口及重启策略有差别。修改部署时核查两套配置及 `offline/` 说明。
+- 离线升级脚本隔离回归测试在Linux执行 `python3 -m unittest discover -s scripts/tests -v`，使用模拟Docker/Compose，不操作业务部署；不能替代真实ARM64升级验收。
 - 离线交付使用预置镜像与依赖，模型生成仍需已配置的可达模型服务。
 - 修改根 Matrix 插件或 runner 后，需要更新 OpenCode 镜像；仅重启 API/Worker 不会更新镜像内插件。
 
