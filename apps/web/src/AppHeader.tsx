@@ -1,11 +1,17 @@
-import {BrowseButton} from "./navigation";
+import {BrowseButton, BrowseLink} from "./navigation";
 import {useState, type ReactNode} from "react";
 import {Avatar, Button, Dropdown, Layout, Tooltip} from "antd";
 import {ArrowLeftOutlined, CodeOutlined, KeyOutlined, LogoutOutlined, QuestionCircleOutlined, UserAddOutlined, UserOutlined} from "@ant-design/icons";
 import {useQueryClient} from "@tanstack/react-query";
-import {useNavigate} from "react-router-dom";
+import {useLocation, useNavigate} from "react-router-dom";
 import {api, type CurrentUser} from "./api";
 import {SettingsModal, type SettingsTab} from "./SettingsModal";
+
+export function HeaderBrand({beforeLeave}: {beforeLeave?: () => boolean}) {
+    const {pathname} = useLocation();
+    return pathname === "/" ? <b className="header-brand">SunwiseMatriX TR</b>
+        : <BrowseLink to="/" className="header-brand" beforeLeave={beforeLeave}>SunwiseMatriX TR</BrowseLink>;
+}
 
 export function settingsTabsForRole(role?: CurrentUser["role"]): SettingsTab[] {
     return role === "ADMIN" ? ["password", "users", "opencode"] : ["password"]
@@ -40,7 +46,7 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
     const settingsItems = settingsTabsForRole(user?.role).map(tab => ({
         key: `settings:${tab}`, ...settingPresentation[tab]
     }));
-    return <><Layout.Header className="header"><b>SunwiseMatriX TR</b>{backTo &&
+    return <><Layout.Header className="header"><HeaderBrand beforeLeave={beforeLeave}/>{backTo &&
         <Tooltip title={backTooltip} trigger={["hover", "focus"]}><span className="header-back"><BrowseButton ghost icon={<ArrowLeftOutlined/>} to={backTo} beforeLeave={beforeLeave}>{backLabel}</BrowseButton></span></Tooltip>}{projectName && <Tooltip title={projectName} trigger={["hover", "focus"]}><span className="header-project" tabIndex={0}>当前项目：{projectName}</span></Tooltip>}<span className="grow"/>{actions}<Tooltip title="下载使用手册">
         <Button ghost shape="circle" aria-label="下载使用手册" icon={<QuestionCircleOutlined/>}
                 href="/manuals/Matrix-Req-Manager用户使用手册.pdf"

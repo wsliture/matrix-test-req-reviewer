@@ -20,7 +20,7 @@ html, body, #root {
     flex: none
 }
 
-.header > b, .header .header-back {
+.header-brand, .header .header-back {
     flex: none;
     white-space: nowrap;
 }
@@ -3024,6 +3024,16 @@ a.browse-link:focus-visible, a.source-heading-link:focus-visible {
 
 .trace-source-links .ant-tag a.browse-link,
 .trace-source-links .ant-tag a.browse-link:is(:hover, :active, :visited) {
+    color: inherit;
+    text-decoration: none;
+}
+
+.header-brand {
+    font-weight: 700;
+    color: inherit;
+}
+
+a.header-brand:is(:link, :visited, :hover, :active) {
     color: inherit;
     text-decoration: none;
 }
