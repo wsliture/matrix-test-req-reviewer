@@ -192,9 +192,9 @@ npm run build
 # 运行全部测试
 npm test
 
-# 检查 API、Worker 测试的 TypeScript 类型（Web 测试类型检查包含在 Web 构建中）
-npx tsc -p apps/api/tsconfig.tests.json
-npx tsc -p apps/worker/tsconfig.tests.json
+# 检查 API、Worker 源码和测试的 TypeScript 类型（Web 测试类型检查包含在 Web 构建中）
+npx tsc -p apps/api/tsconfig.json
+npx tsc -p apps/worker/tsconfig.json
 
 # 运行单个测试文件
 npx vitest run apps/api/tests/archive.test.ts
