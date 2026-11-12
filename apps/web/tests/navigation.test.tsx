@@ -8,6 +8,23 @@ const event = (overrides = {}) => ({button: 0, ctrlKey: false, metaKey: false, s
     defaultPrevented: false, stopPropagation: vi.fn(), preventDefault: vi.fn(), ...overrides}) as unknown as MouseEvent<HTMLAnchorElement>;
 
 describe("native browse links", () => {
+    it("preserves all navigation parameters in browsers without URLSearchParams.size", () => {
+        const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size");
+        try {
+            Reflect.deleteProperty(URLSearchParams.prototype, "size");
+            expect(new URLSearchParams("a=1").size).toBeUndefined();
+            expect(reviewHref("p", {chapter: "4.1"})).toBe("/projects/p/review?chapter=4.1");
+            const file = new URL(pageHref("/projects/p", {debugFile: ".matrix/中文 +#.json"}), "http://localhost");
+            expect(file.searchParams.get("debugFile")).toBe(".matrix/中文 +#.json");
+            const review = new URL(reviewHref("p", {requirementId: "r", documentId: "d", sourceNodeId: "s"}), "http://localhost");
+            expect([...review.searchParams.entries()]).toEqual([["requirementId", "r"], ["documentId", "d"], ["sourceNodeId", "s"]]);
+            expect(pageHref("/projects/p/requirement-diff", {from: "v1", to: "v2", entityUid: "r"}, "kind=MODIFIED"))
+                .toBe("/projects/p/requirement-diff?kind=MODIFIED&from=v1&to=v2&entityUid=r");
+            expect(pageHref("/projects/p", {debugFile: undefined}, "debugFile=old")).toBe("/projects/p");
+        } finally {
+            if (descriptor) Object.defineProperty(URLSearchParams.prototype, "size", descriptor);
+        }
+    });
     it("renders real links and removes disabled destinations", () => {
         const html = renderToStaticMarkup(<MemoryRouter><BrowseLink to="/projects/p">项目</BrowseLink><BrowseLink to="/hidden" disabled>未生成</BrowseLink></MemoryRouter>);
         expect(html).toContain('href="/projects/p"'); expect(html).not.toContain('href="/hidden"'); expect(html).toContain('aria-disabled="true"');

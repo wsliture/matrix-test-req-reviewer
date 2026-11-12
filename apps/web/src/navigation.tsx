@@ -18,7 +18,8 @@ export function pageHref(path: string, values: Record<string, string | undefined
     for (const [key, value] of Object.entries(values)) {
         if (value) params.set(key, value); else params.delete(key);
     }
-    return path + (params.size ? `?${params}` : "");
+    const query = params.toString();
+    return path + (query ? `?${query}` : "");
 }
 
 export function reviewHref(projectId: string, values: Record<string, string | undefined>, search = "") {
