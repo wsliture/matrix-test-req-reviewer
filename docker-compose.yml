@@ -45,7 +45,12 @@ services:
     volumes:
       - projects:/data/projects
       - opencode-config:/opencode-config
+    networks:
+      default:
+      matrix-proxy:
+        ipv4_address: ${MATRIX_API_PROXY_IP:-172.29.143.3}
     environment:
+      MATRIX_TRUSTED_PROXY_IPS: ${MATRIX_WEB_PROXY_IP:-172.29.143.2}
       MATRIX_PHASE2_RUNNER_URL: http://opencode:4097
   worker:
     build: { context: ., dockerfile: docker/app.Dockerfile, target: worker }
@@ -68,7 +73,16 @@ services:
     depends_on:
       api:
         condition: service_started
+    networks:
+      matrix-proxy:
+        ipv4_address: ${MATRIX_WEB_PROXY_IP:-172.29.143.2}
     ports: [ "8080:80" ]
+networks:
+  matrix-proxy:
+    ipam:
+      config:
+        - subnet: ${MATRIX_WEB_PROXY_SUBNET:-172.29.143.0/24}
+
 volumes:
   postgres-data:
   redis-data:

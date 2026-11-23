@@ -9,7 +9,7 @@ export class TraceabilityService {
 
     async reviewData(projectId: string) {
         const project = await this.db.project.findUnique({where: {id: projectId}, include: {
-            runs: {orderBy: {startedAt: "desc"}, take: 1}
+            runs: {orderBy: [{createdAt: "desc"}, {id: "desc"}], take: 1}
         }});
         if (!project) throw new NotFoundException("项目不存在");
         const [documents, requirements, links] = await Promise.all([

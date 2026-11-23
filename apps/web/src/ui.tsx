@@ -578,7 +578,8 @@ function ProjectPage() {
     if (!query.data) return <Shell backTo="/" backLabel="返回项目列表"><Spin/></Shell>;
     const p = query.data, latest = p.runs[0];
     const running = latest?.status === "RUNNING" || latest?.status === "QUEUED";
-    const runLabel = phase2RunButtonLabel(latest?.status);
+    const matrixManaged = Boolean(latest && latest.id === p.matrixRunId);
+    const runLabel = matrixManaged && latest.status === "CANCELLED" ? "请从 Matrix 发起新一轮" : phase2RunButtonLabel(latest?.status);
     const detail = <Content ref={projectContentRef} className={`page ${debugOpen ? "page-debug-open" : ""}`}><Space><Typography.Title level={3}>{p.name}</Typography.Title><Status value={p.status}/>
         {user?.role === "ADMIN" && <Button type={debugOpen ? "primary" : "default"} icon={<BugOutlined/>} onClick={() => {
             if (debugOpen && !confirmDebugLeave()) return;
@@ -602,15 +603,15 @@ function ProjectPage() {
                 {running && ((latest?.attemptCount || 0) > 1 || ["resume_queued", "retry_queued", "resume_check_artifacts"].includes(latest?.currentStage || "")) &&
                     <Tag color="blue" style={{marginLeft: 8}}>续跑累计进度 {latest?.progress || 0}%</Tag>}</p>
             <Space className="phase2-run-actions"><Button type="primary"
-                loading={run.isPending} disabled={running}
+                loading={run.isPending} disabled={running || (matrixManaged && latest.status === "CANCELLED")}
                 onClick={() => run.mutate({latest, enabled: autoRetry})}>{runLabel}</Button>
-            <Checkbox checked={autoRetry} disabled={updateAutoRetry.isPending} onChange={event => {
+            <Checkbox checked={autoRetry} disabled={matrixManaged || updateAutoRetry.isPending} onChange={event => {
                 const enabled = event.target.checked;
                 setAutoRetry(enabled);
                 if (latest) updateAutoRetry.mutate({runId: latest.id, enabled})
             }}>失败自动重试</Checkbox>
             {running && latest && <Popconfirm title="终止测试需求生成？"
-                                              description="终止后保留已完成阶段工件，并可重新开始生成。"
+                                              description={matrixManaged ? "终止后保留已完成阶段工件。请从 Matrix 发起新一轮生成。" : "终止后保留已完成阶段工件，并可重新开始生成。"}
                                               okText="终止" cancelText="继续运行" okButtonProps={{danger: true}}
                                               onConfirm={() => cancel.mutate(latest.id)}><Button danger
                                                                                                  icon={<StopOutlined/>}
@@ -1745,7 +1746,11 @@ export function App() {
     const location = useLocation(), nav = useNavigate(), qc = useQueryClient();
     const currentPath = `${location.pathname}${location.search}${location.hash}`;
     const [expiredPath, setExpiredPath] = useState<string>();
-    const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false,
+    const me = useQuery({queryKey: ["me"], queryFn: async () => {
+        const user = await api<CurrentUser>("/auth/me");
+        if (user.service) throw new ApiError("请登录", 401);
+        return user;
+    }, retry: false,
         staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false});
     useEffect(() => subscribeToSessionExpired(() => {
         setExpiredPath(previous => previous || currentPath);

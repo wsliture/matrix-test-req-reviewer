@@ -3,7 +3,7 @@ import {settingsTabsForRole} from "../src/AppHeader";
 
 describe("app header settings", () => {
     it("shows account and system settings to administrators", () => {
-        expect(settingsTabsForRole("ADMIN")).toEqual(["password", "users", "opencode"])
+        expect(settingsTabsForRole("ADMIN")).toEqual(["password", "users", "opencode", "matrix"])
     });
 
     it("shows only password settings to non-administrators", () => {

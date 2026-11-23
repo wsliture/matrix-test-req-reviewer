@@ -14,7 +14,7 @@ export function HeaderBrand({beforeLeave}: {beforeLeave?: () => boolean}) {
 }
 
 export function settingsTabsForRole(role?: CurrentUser["role"]): SettingsTab[] {
-    return role === "ADMIN" ? ["password", "users", "opencode"] : ["password"]
+    return role === "ADMIN" ? ["password", "users", "opencode", "matrix"] : ["password"]
 }
 
 export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLeave, projectName, backTooltip}: {
@@ -41,7 +41,8 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
     const settingPresentation = {
         password: {icon: <KeyOutlined/>, label: "修改密码"},
         users: {icon: <UserAddOutlined/>, label: "添加用户"},
-        opencode: {icon: <CodeOutlined/>, label: "OpenCode 配置"}
+        opencode: {icon: <CodeOutlined/>, label: "OpenCode 配置"},
+        matrix: {icon: <CodeOutlined/>, label: "Matrix 对接"}
     };
     const settingsItems = settingsTabsForRole(user?.role).map(tab => ({
         key: `settings:${tab}`, ...settingPresentation[tab]

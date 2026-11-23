@@ -270,7 +270,7 @@ export class DebugFilesService implements OnModuleDestroy {
 
     private async runningStatus(projectId: string) {
         const run = await this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}},
-            orderBy: {startedAt: "desc"}, select: {status: true}});
+            orderBy: [{createdAt: "desc"}, {id: "desc"}], select: {status: true}});
         return run?.status || null
     }
 

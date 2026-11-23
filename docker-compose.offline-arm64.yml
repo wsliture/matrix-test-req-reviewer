@@ -55,7 +55,12 @@ services:
     image: requirements-manager-api:arm64
     pull_policy: never
     env_file: .env
+    networks:
+      default:
+      matrix-proxy:
+        ipv4_address: ${MATRIX_API_PROXY_IP:-172.29.143.3}
     environment:
+      MATRIX_TRUSTED_PROXY_IPS: ${MATRIX_WEB_PROXY_IP:-172.29.143.2}
       DATABASE_URL: postgresql://matrix:${POSTGRES_PASSWORD}@postgres:5432/matrix_requirements
       REDIS_URL: redis://redis:6379
       OPENCODE_URL: http://opencode:4096
@@ -103,6 +108,15 @@ services:
     depends_on:
       api:
         condition: service_started
+    networks:
+      matrix-proxy:
+        ipv4_address: ${MATRIX_WEB_PROXY_IP:-172.29.143.2}
     ports:
       - "8089:80"
     restart: unless-stopped
+
+networks:
+  matrix-proxy:
+    ipam:
+      config:
+        - subnet: ${MATRIX_WEB_PROXY_SUBNET:-172.29.143.0/24}

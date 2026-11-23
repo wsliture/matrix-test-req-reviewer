@@ -4,7 +4,38 @@ import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {useNavigate} from "react-router-dom";
 import {api, type CurrentUser} from "./api";
 
-export type SettingsTab = "password" | "users" | "opencode";
+export type SettingsTab = "password" | "users" | "opencode" | "matrix";
+
+type MatrixSettingsValues = {callbackBase: string};
+
+function MatrixSettings() {
+    const [form] = Form.useForm<MatrixSettingsValues>();
+    const query = useQuery({queryKey: ["matrix-settings"],
+        queryFn: () => api<MatrixSettingsValues>("/settings/matrix")});
+    const client = useQueryClient();
+    useEffect(() => {
+        if (query.data) form.setFieldsValue(query.data);
+    }, [query.data, form]);
+    const save = useMutation({
+        mutationFn: (value: MatrixSettingsValues) => api<MatrixSettingsValues>("/settings/matrix", {
+            method: "PUT", body: JSON.stringify({callbackBase: value.callbackBase ?? ""})
+        }),
+        onSuccess: value => {
+            client.setQueryData(["matrix-settings"], value);
+            form.setFieldsValue(value);
+        }
+    });
+    return <Form form={form} layout="vertical" onValuesChange={() => save.reset()} onFinish={value => save.mutate(value)}>
+        <Form.Item name="callbackBase" label="Matrix 回调基地址">
+            <Input placeholder="http://192.168.4.20:8080/jeecg-boot" disabled={!query.isSuccess || save.isPending}/>
+        </Form.Item>
+        {query.error && <Alert type="error" showIcon message={query.error.message}/>}
+        {save.error && <Alert type="error" showIcon message={save.error.message}/>}
+        {save.isSuccess && <Alert className="opencode-config-feedback" type="success" showIcon closable
+            message="Matrix 对接设置已保存" onClose={() => save.reset()}/>}
+        <Button type="primary" htmlType="submit" loading={save.isPending} disabled={!query.isSuccess}>保存</Button>
+    </Form>;
+}
 
 export function SettingsModal({open, activeTab, user, onTabChange, onClose, beforeLeave}: {
     open: boolean;
@@ -167,7 +198,7 @@ export function SettingsModal({open, activeTab, user, onTabChange, onClose, befo
                     </Typography.Text>}
                 </div></>}
         </div>
-    }] : [])];
+    }, {key: "matrix", label: "Matrix 对接", children: open && activeTab === "matrix" ? <MatrixSettings/> : null}] : [])];
     return <Modal open={open} title="设置" width={760} footer={null} destroyOnHidden
         closable={!saveConfig.isPending} keyboard={!saveConfig.isPending} maskClosable={!saveConfig.isPending}
         onCancel={() => confirmDiscardConfig(onClose)}>

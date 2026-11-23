@@ -26,9 +26,9 @@ import {calculateReviewSummary} from "./review-summary.js";
 
 const documentQueue = new Queue("document-index", {connection: new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null})});
 
-const REQUIRED = ["chapter1-scope.json", "chapter2-system-overview.json", "hardware-interface-model.json", "functional-test-content.json", "performance-test-content.json", "interface-test-content.json", "reliability-safety-test-content.json", "margin-test-content.json", "boundary-test-content.json", "data-processing-test-content.json", "recovery-test-content.json", "strength-test-content.json", "phase2-test-traceability.json"];
+export const REQUIRED = ["chapter1-scope.json", "chapter2-system-overview.json", "hardware-interface-model.json", "functional-test-content.json", "performance-test-content.json", "interface-test-content.json", "reliability-safety-test-content.json", "margin-test-content.json", "boundary-test-content.json", "data-processing-test-content.json", "recovery-test-content.json", "strength-test-content.json", "phase2-test-traceability.json"];
 
-async function findProjectRoot(root: string) {
+export async function findProjectRoot(root: string) {
     const entries = await readdir(root, {withFileTypes: true});
     if (entries.some(x => x.isFile() && x.name.toLowerCase().endsWith(".docx"))) return root;
     const dirs = entries.filter(x => x.isDirectory());
@@ -44,7 +44,7 @@ export class ProjectsService {
     list() {
         return readWithRunClock(this.db, async (tx, now) => (await tx.project.findMany({
             orderBy: [{createdAt: "desc"}, {id: "desc"}],
-            include: {runs: {orderBy: {startedAt: "desc"}, take: 1},
+            include: {runs: {orderBy: [{createdAt: "desc"}, {id: "desc"}], take: 1},
                 editRuns: {orderBy: {createdAt: "desc"}, take: 1}, documents: true}
         })).map(project => {
             const {editRuns, ...visible} = project;
@@ -57,7 +57,7 @@ export class ProjectsService {
         return readWithRunClock(this.db, async (tx, now) => {
             const project = await tx.project.findUnique({
                 where: {id},
-                include: {documents: true, runs: {orderBy: {startedAt: "desc"}}}
+                include: {documents: true, runs: {orderBy: [{createdAt: "desc"}, {id: "desc"}]}}
             });
             if (!project) throw new NotFoundException("项目不存在或已被删除");
             let reviewSummary = null;
@@ -74,7 +74,10 @@ export class ProjectsService {
                     reviewSummary = null
                 }
             }
-            return {...project, runs: project.runs.map(run => withElapsed(run, now)), reviewSummary}
+            const matrixRun = project.source === "MATRIX" && await tx.matrixPlanningRun.findFirst({
+                where: {projectId: id, phase2RunId: project.runs[0]?.id}, select: {phase2RunId: true}
+            });
+            return {...project, matrixRunId: matrixRun ? matrixRun.phase2RunId : null, runs: project.runs.map(run => withElapsed(run, now)), reviewSummary}
         })
     }
 

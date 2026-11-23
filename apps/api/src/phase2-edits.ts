@@ -82,6 +82,9 @@ export class Phase2EditsService {
             operation: body.operation, expected_revision: body.expected_revision, value: body.value,
             identity: this.runnerIdentity(node)};
         const run = await this.db.$transaction(async tx => {
+            await tx.$queryRaw`SELECT id FROM "Project" WHERE id=${projectId} FOR UPDATE`;
+            const activeGeneration = await tx.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+            if (activeGeneration) throw new ConflictException("该项目已有生成任务");
             const created = await tx.phase2EditRun.create({data: {projectId, userId: user.id,
                 targetBusinessId: node.businessId, operation: body.operation, expectedRevision: body.expected_revision,
                 request: request as any}});
@@ -150,6 +153,11 @@ export class Phase2EditsService {
             requirement_operations: requirementOperations, reference_operations: referenceOperations,
             expected_artifact_revisions: body.expected_artifact_revisions, generation_mode: generationMode};
         const run = await this.db.$transaction(async tx => {
+            await tx.$queryRaw`SELECT id FROM "Project" WHERE id=${projectId} FOR UPDATE`;
+            const activeGeneration = await tx.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+            if (activeGeneration?.id !== generation?.id || activeGeneration?.currentStage === "resume_queued") {
+                throw new ConflictException("生成任务状态已变化，请刷新后重试");
+            }
             const created = await tx.phase2EditRun.create({data: {projectId, userId: user.id, targetBusinessId: "phase2-document",
                 operation: "batch", expectedRevision: body.expected_revision, request: request as any}});
             if (!generationMode) await tx.project.update({where: {id: projectId}, data: {status: "REBUILDING"}});

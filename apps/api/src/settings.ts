@@ -6,6 +6,8 @@ import {mkdir, readFile, rename, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
 
+import {normalizeMatrixAddress} from "./matrix-settings.js";
+
 const configDirectory = process.env.OPENCODE_CONFIG_DIR || "/opencode-config";
 const configPath = path.join(configDirectory, "opencode.json");
 const restartPath = path.join(configDirectory, ".restart-request");
@@ -40,6 +42,23 @@ async function healthy() {
 @Controller("settings")
 export class SettingsController {
     constructor(private db: PrismaService) {
+    }
+
+    @Get("matrix") async getMatrix(@Req() request: any) {
+        requireAdmin(request);
+        const setting = await this.db.systemSetting.findUnique({where: {key: "matrixCallbackBase"}});
+        return {callbackBase: setting?.value ?? ""};
+    }
+
+    @Put("matrix") async updateMatrix(@Req() request: any, @Body() body: {callbackBase?: unknown}) {
+        requireAdmin(request);
+        const key = "matrixCallbackBase", value = normalizeMatrixAddress(body?.callbackBase);
+        await this.db.$transaction([
+            this.db.systemSetting.upsert({where: {key}, create: {key, value}, update: {value}}),
+            this.db.auditLog.create({data: {userId: request.user.id, action: "MATRIX_CONFIG_CHANGED",
+                resourceType: "SystemSetting", resourceId: key}})
+        ]);
+        return {callbackBase: value};
     }
 
     @Post("users") async createUser(@Req() request: any, @Body() body: { username?: string; password?: string }) {

@@ -52,13 +52,17 @@ export class RunsService {
     }
 
     async create(projectId: string, autoRetry = true) {
-        const active = await this.db.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
-        if (active) throw new ConflictException("该项目已有Phase 2任务");
-        const edit = await this.db.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
-        if (edit) throw new ConflictException("该项目正在编辑重建");
-        const run = await this.db.phase2Run.create({data: {projectId, autoRetry}});
-        await this.db.project.update({where: {id: projectId}, data: {status: "GENERATING"}});
-        await this.db.runEvent.create({data: {runId: run.id, type: "run.queued", payload: {projectId}}});
+        const run = await this.db.$transaction(async tx => {
+            await tx.$queryRaw`SELECT id FROM "Project" WHERE id=${projectId} FOR UPDATE`;
+            const active = await tx.phase2Run.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+            if (active) throw new ConflictException("该项目已有Phase 2任务");
+            const edit = await tx.phase2EditRun.findFirst({where: {projectId, status: {in: ["QUEUED", "RUNNING"]}}});
+            if (edit) throw new ConflictException("该项目正在编辑重建");
+            const created = await tx.phase2Run.create({data: {projectId, autoRetry}});
+            await tx.project.update({where: {id: projectId}, data: {status: "GENERATING"}});
+            await tx.runEvent.create({data: {runId: created.id, type: "run.queued", payload: {projectId}}});
+            return created;
+        });
         await queue.add("matrix-phase2", {runId: run.id, projectId}, {
             jobId: run.id,
             removeOnComplete: 100,
@@ -68,6 +72,9 @@ export class RunsService {
     }
 
     async resume(id: string) {
+        if (await this.db.matrixPlanningRun.findUnique({where: {phase2RunId: id}})) {
+            throw new ConflictException("请通过 Matrix 使用新的 runId 启动一轮生成");
+        }
         const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}});
         if (!(run.status === "FAILED" || run.status === "CANCELLED")) {
             throw new ConflictException("只有失败或已终止的任务可以继续")
@@ -101,6 +108,9 @@ export class RunsService {
 
     async setAutoRetry(id: string, value: unknown) {
         if (typeof value !== "boolean") throw new BadRequestException("autoRetry必须是布尔值");
+        if (!value && await this.db.matrixPlanningRun.findUnique({where: {phase2RunId: id}})) {
+            throw new ConflictException("Matrix 生成任务始终启用自动重试");
+        }
         await this.db.phase2Run.update({where: {id}, data: {autoRetry: value}});
         await this.db.runEvent.create({data: {runId: id, type: "run.auto_retry_changed", payload: {enabled: value}}});
         return this.get(id)
@@ -144,11 +154,12 @@ export class RunsService {
         }
     }
 
-    async cancel(id: string) {
+    async cancel(id: string, matrix = false) {
         const run = await this.db.phase2Run.findUniqueOrThrow({where: {id}, include: {project: true}});
+        if (matrix && run.status === "CANCELLED") return;
         if (!(["QUEUED", "RUNNING"] as string[]).includes(run.status)) throw new ConflictException("任务已经结束，无法终止");
         let finalUsage: TokenUsage | undefined;
-        if (run.opencodeSessionId) {
+        if (!matrix && run.opencodeSessionId) {
             try {
                 const collected = await collectSessionUsage(run.opencodeSessionId, run.project.workspacePath);
                 const existing = run.tokenUsage as TokenUsage | null;
@@ -158,17 +169,27 @@ export class RunsService {
                 if (existing) finalUsage = {...existing, complete: false}
             }
         }
-        await this.db.$transaction(async tx => {
+        const changed = await this.db.$transaction(async tx => {
             const [clock] = await tx.$queryRaw<{now: Date}[]>`SELECT statement_timestamp() AT TIME ZONE 'UTC' AS now`;
-            await tx.$executeRaw`UPDATE "Phase2Run"
+            const changed = await tx.$executeRaw`UPDATE "Phase2Run"
                 SET status = 'CANCELLED', "finishedAt" = ${clock.now}, "errorMessage" = NULL,
                     "accumulatedElapsedMs" = "accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0
                       ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (${clock.now} - "attemptStartedAt")) * 1000))::BIGINT END,
                     "attemptStartedAt" = NULL
                 WHERE id = ${id} AND status IN ('QUEUED', 'RUNNING')`;
-            if (finalUsage) await tx.phase2Run.update({where: {id}, data: {tokenUsage: finalUsage, usageUpdatedAt: new Date()}})
+            if (!changed) return false;
+            if (finalUsage) await tx.phase2Run.update({where: {id}, data: {tokenUsage: finalUsage, usageUpdatedAt: new Date()}});
+            await tx.runEvent.create({data: {runId: id, type: "run.cancelled", payload: {}}});
+            const missing = Array.isArray(run.project.missingArtifacts) ? run.project.missingArtifacts.length : 0;
+            await tx.project.update({where: {id: run.projectId},
+                data: {status: missing === 0 ? "READY_FOR_REVIEW" : missing >= 13 ? "PENDING_GENERATION" : "INCOMPLETE_MATRIX"}});
+            return true;
         });
-        await this.db.runEvent.create({data: {runId: id, type: "run.cancelled", payload: {}}});
+        if (!changed) {
+            if (matrix && (await this.db.phase2Run.findUnique({where: {id}}))?.status === "CANCELLED") return;
+            throw new ConflictException("任务已经结束，无法终止");
+        }
+        if (matrix) return;
         const job = await queue.getJob(id), state = await job?.getState();
         if (job && state !== "active") await job.remove();
         if (run.opencodeSessionId) {
@@ -177,11 +198,6 @@ export class RunsService {
                 directory: run.project.workspacePath
             }).catch(() => undefined)
         }
-        const missing = Array.isArray(run.project.missingArtifacts) ? run.project.missingArtifacts.length : 0;
-        await this.db.project.update({
-            where: {id: run.projectId},
-            data: {status: missing === 0 ? "READY_FOR_REVIEW" : missing >= 13 ? "PENDING_GENERATION" : "INCOMPLETE_MATRIX"}
-        });
         return this.get(id)
     }
 

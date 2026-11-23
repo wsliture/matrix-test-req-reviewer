@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from "vitest";
 import iconv from "iconv-lite";
 import {decodeZipEntryPath, safeExtract} from "../src/archive.js";
 import PizZip from "pizzip";
-import {mkdtemp, rm, writeFile} from "node:fs/promises";
+import {mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
 
@@ -57,6 +57,26 @@ describe("DOCX-only project archives", () => {
     it("rejects PDF and other non-DOCX files", async () => {
         const value = await archive({"需求规格说明书.docx": "docx", "说明.pdf": "pdf"});
         await expect(safeExtract(value.file, value.extract, {docxOnly: true})).rejects.toThrow("非DOCX文件")
+    });
+
+    it("extracts all DOCX files from mixed Matrix archives", async () => {
+        const value = await archive({"inputs/spec.docx": "spec", "inputs/manual.DOCX": "manual", "inputs/notes.txt": "skip"});
+        await expect(safeExtract(value.file, value.extract, {docxOnly: true, skipOtherFiles: true}))
+            .resolves.toMatchObject({documentCount: 2});
+        expect((await readdir(path.join(value.extract, "inputs"))).sort()).toEqual(["manual.DOCX", "spec.docx"]);
+        expect(await readFile(path.join(value.extract, "inputs", "spec.docx"), "utf8")).toBe("spec");
+    });
+
+    it("rejects mixed archives with no DOCX or a traversal among skipped files", async () => {
+        const noDocx = await archive({"notes.txt": "skip"});
+        const traversal = await archive({"spec.docx": "spec", "../notes.txt": "escape"});
+        await expect(safeExtract(noDocx.file, noDocx.extract, {docxOnly: true, skipOtherFiles: true})).rejects.toThrow("至少");
+        await expect(safeExtract(traversal.file, traversal.extract, {docxOnly: true, skipOtherFiles: true})).rejects.toThrow("非法路径");
+    });
+
+    it("rejects duplicate paths including case variants", async () => {
+        const value = await archive({"inputs/Spec.docx": "one", "inputs/spec.docx": "two"});
+        await expect(safeExtract(value.file, value.extract, {docxOnly: true, skipOtherFiles: true})).rejects.toThrow("重复路径");
     });
 
     it("rejects uploaded Matrix artifacts", async () => {

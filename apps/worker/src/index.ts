@@ -15,15 +15,31 @@ import {createRequirementRevision, removeRequirementRevision} from "./requiremen
 import {addUsage, emptyTokenUsage, normalizeTokens, SessionUsageTracker, type TokenUsage} from "./token-usage.js";
 import {decidePhase2Retry, Phase2ExecutionError} from "./retry-policy.js";
 
+import {deliverMatrixCallbacks, dispatchMatrixJobs, loadPlanningSummary, requeueAbandonedMatrixRun} from "./matrix-planning.js";
+
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {maxRetriesPerRequest: null}),
     db = new Pool({connectionString: process.env.DATABASE_URL}),
     phase2Queue = new Queue("phase2", {connection});
+const matrixQueue = new Queue("phase2", {connection: new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
+    enableOfflineQueue: false, maxRetriesPerRequest: 1
+})});
+matrixQueue.on("error", error => console.error("Matrix queue connection", error));
+deliverMatrixCallbacks(db);
+
 const auth = Buffer.from(`${process.env.OPENCODE_USERNAME || "opencode"}:${process.env.OPENCODE_PASSWORD || ""}`).toString("base64");
 const client = createOpencodeClient({
     fetch: opencodeFetch,
     baseUrl: process.env.OPENCODE_URL || "http://localhost:4096",
     headers: {Authorization: `Basic ${auth}`}
 });
+
+async function abortMatrixSession(sessionID: string, directory: string) {
+    const response = await client.session.abort({sessionID, directory}, {signal: AbortSignal.timeout(5000)});
+    if (!response.response.ok && response.response.status !== 404) {
+        throw new Error("Matrix session abort failed with HTTP " + response.response.status);
+    }
+}
+dispatchMatrixJobs(db, matrixQueue, abortMatrixSession);
 
 const STAGE_ARTIFACTS: Record<string, string> = {
     finalize_chapter1_scope: "chapter1-scope.json",
@@ -64,7 +80,9 @@ async function update(runId: string, data: {
     session?: string;
     error?: string;
     completed?: Set<string>;
-    tokenUsage?: TokenUsage
+    tokenUsage?: TokenUsage;
+    matrixSummary?: Awaited<ReturnType<typeof loadPlanningSummary>>;
+    attempt?: number
 }) {
     const fields: string[] = [], values: unknown[] = [];
     const add = (column: string, value: unknown) => {
@@ -89,23 +107,40 @@ async function update(runId: string, data: {
     }
     values.push(runId);
     const terminal = ["SUCCEEDED", "FAILED", "CANCELLED"].includes(data.status || "");
-    const result = await db.query(`update "Phase2Run"
-                    set ${fields.join(",")}
-                    where id = $${values.length}${terminal ? " and status='RUNNING'" : ""}`, values);
+    const runParameter = values.length;
+    if (data.attempt !== undefined) values.push(data.attempt);
+    const writeRun = `update "Phase2Run" set ${fields.join(",")}
+        where id = $${runParameter}${terminal ? " and status='RUNNING'" : ""}
+        ${data.attempt === undefined ? "" : 'and "attemptCount"=$' + values.length}`;
+    if (data.status === "SUCCEEDED") {
+        values.push(data.matrixSummary ? JSON.stringify(data.matrixSummary) : null);
+        const result = await db.query(`with completed as (
+            ${writeRun} returning id,"projectId"
+        ), ready as (
+            update "Project" p set status='READY_FOR_REVIEW',"missingArtifacts"='[]'::jsonb,"updatedAt"=now()
+            from completed c where p.id=c."projectId"
+        ), snapshot as (
+            update "MatrixPlanningRun" m set "resultSummary"=$${values.length}::jsonb
+            from completed c where m."phase2RunId"=c.id
+        ) select id from completed`, values);
+        return result.rowCount || 0;
+    }
+    const result = await db.query(writeRun, values);
     return result.rowCount || 0
 }
 
-async function claim(runId: string) {
+async function claim(runId: string, matrixAttempt?: number) {
     const result = await db.query(`update "Phase2Run" set status=$1,
         "startedAt"=coalesce("startedAt",statement_timestamp() AT TIME ZONE 'UTC'),
         "attemptStartedAt"=statement_timestamp() AT TIME ZONE 'UTC',
-        "attemptCount"="attemptCount"+1,"finishedAt"=NULL
-        ,"currentStage"=CASE WHEN "attemptCount">0 THEN 'resume_check_artifacts' ELSE "currentStage" END
-        where id=$2 and status=$3 returning id,"attemptCount"`, ["RUNNING", runId, "QUEUED"]);
+        "attemptCount"="attemptCount"+1,"finishedAt"=NULL, "opencodeSessionId"=NULL
+        ,"currentStage"=CASE WHEN "attemptCount">0 OR "currentStage"='resume_queued' THEN 'resume_check_artifacts' ELSE "currentStage" END
+        where id=$2 and status=$3 and ($4::int is null or "attemptCount"=$4) returning id,"attemptCount"`,
+        ["RUNNING", runId, "QUEUED", matrixAttempt ?? null]);
     return result.rowCount === 1 ? Number(result.rows[0].attemptCount) : undefined
 }
 
-async function finishFailedAttempt(runId: string, message: string, completed: Set<string>, retryQueued: boolean) {
+async function finishFailedAttempt(runId: string, message: string, completed: Set<string>, retryQueued: boolean, attempt?: number) {
     const result = await db.query(`update "Phase2Run" set
         "accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END,
         "attemptStartedAt"=NULL,"completedStages"=$1,"errorMessage"=$2,
@@ -113,8 +148,9 @@ async function finishFailedAttempt(runId: string, message: string, completed: Se
         "currentStage"=CASE WHEN $4 THEN 'retry_queued' ELSE "currentStage" END,
         "finishedAt"=CASE WHEN $4 THEN NULL ELSE statement_timestamp() AT TIME ZONE 'UTC' END,
         "opencodeSessionId"=NULL
-        where id=$3 and status='RUNNING' returning status,"autoRetry","attemptCount"`,
-        [JSON.stringify([...completed]), message, runId, retryQueued]);
+        where id=$3 and status='RUNNING' and ($5::int is null or "attemptCount"=$5)
+        returning status,"autoRetry","attemptCount"`,
+        [JSON.stringify([...completed]), message, runId, retryQueued, attempt ?? null]);
     return result.rows[0] as {status: string; autoRetry: boolean; attemptCount: number} | undefined
 }
 
@@ -298,17 +334,48 @@ async function handleTool(runId: string, part: ToolPart, completed: Set<string>,
 }
 
 new Worker("phase2", async job => {
-    const runId = String(job.data.runId), p = await project(runId),
+    const runId = String(job.data.runId), matrixAttempt = job.data.matrixAttempt as number | undefined;
+    // A stalled BullMQ job can be redelivered before its old database state was cleared.
+    if (matrixAttempt !== undefined && await requeueAbandonedMatrixRun(db, runId, matrixAttempt + 1, abortMatrixSession)) {
+        return {retrying: true};
+    }
+    const attempt = await claim(runId, matrixAttempt);
+    if (!attempt) return {cancelled: true};
+    const p = await project(runId),
         completed = new Set<string>(Array.isArray(p.completedStages) ? p.completedStages.map(String) : []),
         abort = new AbortController();
     let generatedBaselineId = "";
     let activeSessionId = "", failureStage = "创建OpenCode会话";
-    const attempt = await claim(runId);
-    if (!attempt) return {cancelled: true};
-    await event(runId, "run.started", {projectId: p.id, attempt});
+    let watching = false;
+    const cancellation = matrixAttempt === undefined ? undefined : setInterval(async () => {
+        if (watching || abort.signal.aborted) return;
+        watching = true;
+        try {
+            if (!await cancelled(runId)) return;
+            abort.abort();
+            if (activeSessionId) await client.session.abort({sessionID: activeSessionId, directory: p.workspacePath},
+                {signal: AbortSignal.timeout(5000)});
+        } catch (error) {
+            console.error("Matrix cancellation check", error);
+        } finally {
+            watching = false;
+        }
+    }, 1000);
     try {
+        await event(runId, "run.started", {projectId: p.id, attempt});
         await event(runId, "model.selected", {model: await configuredModel()});
         if (await cancelled(runId)) return {cancelled: true};
+        if (matrixAttempt !== undefined && completed.size) {
+            for (const stage of completed) {
+                try {
+                    if (stage === "finalize_phase2_document") await verify(p.workspacePath);
+                    else await verifyStageArtifact(p.workspacePath, stage);
+                } catch {
+                    completed.delete(stage);
+                }
+            }
+            await update(runId, {completed, progress: progressOf(completed), attempt});
+        }
         const created = await client.session.create({directory: p.workspacePath, title: `Phase 2 ${p.id}`});
         if (!created.data) throw new Error("创建OpenCode会话失败");
         const sessionId = created.data.id;
@@ -347,16 +414,19 @@ new Worker("phase2", async job => {
         if (await cancelled(runId)) return {cancelled: true};
         failureStage = "建立Phase 2评审索引";
         await indexProject(db, p.id, p.workspacePath);
+        const matrixSummary = matrixAttempt === undefined ? undefined : await loadPlanningSummary(db, p.id, p.workspacePath);
+        if (await cancelled(runId)) return {cancelled: true};
         failureStage = "保存Phase 2基线版本";
         const baseline: any = await createRequirementRevision(db, {projectId: p.id, workspace: p.workspacePath, kind: "GENERATED_BASELINE"});
         generatedBaselineId = baseline.revisionId || "";
-        const completedRun = await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed, error: ""});
+        const completedRun = await update(runId, {status: "SUCCEEDED", progress: 100, stage: "finalize_phase2_document", completed, error: "", matrixSummary,
+            attempt: matrixAttempt === undefined ? undefined : attempt});
         if (!completedRun) {
             if (generatedBaselineId) await removeRequirementRevision(db, generatedBaselineId).catch(() => undefined);
             return {cancelled: true}
         }
-        await db.query('update "Project" set status=$1,"missingArtifacts"=$2,"updatedAt"=now() where id=$3', ["READY_FOR_REVIEW", JSON.stringify([]), p.id]);
-        await event(runId, "run.succeeded", {attempt});
+        generatedBaselineId = "";
+        await event(runId, "run.succeeded", {attempt}).catch(error => console.error("Phase2 success event", error));
         return {ok: true}
     } catch (error) {
         abort.abort();
@@ -377,7 +447,7 @@ new Worker("phase2", async job => {
             inputFingerprint: await stageInputFingerprint(p.workspacePath, failureStage),
             previousFingerprint: context?.previousFingerprint,
         });
-        const failed = await finishFailedAttempt(runId, message, completed, retry.shouldRetry);
+        const failed = await finishFailedAttempt(runId, message, completed, retry.shouldRetry, matrixAttempt === undefined ? undefined : attempt);
         if (!failed) return {cancelled: true};
         await event(runId, "run.attempt_failed", {
             message, stage: failureStage, reason, attempt: failed.attemptCount,
@@ -386,6 +456,7 @@ new Worker("phase2", async job => {
         });
         if (retry.shouldRetry) {
             await event(runId, "run.retry_queued", {attempt: failed.attemptCount + 1, delayMs: retry.delayMs});
+            if (matrixAttempt !== undefined) return {retrying: true};
             try {
                 await phase2Queue.add("matrix-phase2-retry", {runId, projectId: p.id}, {
                     jobId: `${runId}-retry-${failed.attemptCount}-${Date.now()}`,
@@ -406,6 +477,7 @@ new Worker("phase2", async job => {
         await event(runId, "run.failed", {message, stage: failureStage, reason, attempt: failed.attemptCount});
         throw error
     } finally {
+        clearInterval(cancellation);
         abort.abort();
     }
 }, {
@@ -424,8 +496,8 @@ startPhase2EditWorker(connection, db).on("error", error => console.error("Phase2
 setTimeout(async () => {
     try {
         const projects = await db.query(`select p.id,p."workspacePath" from "Project" p where
-            not exists (select 1 from "DocumentNode" n join "Document" d on d.id=n."documentId" where d."projectId"=p.id)
-            or not exists (select 1 from "TestRequirementNode" n where n."projectId"=p.id and n."nodeType"='requirement' and n.artifact='performance-test-content.json')`);
+            (p.source <> 'MATRIX' or p.status <> 'GENERATING') and (not exists (select 1 from "DocumentNode" n join "Document" d on d.id=n."documentId" where d."projectId"=p.id)
+            or not exists (select 1 from "TestRequirementNode" n where n."projectId"=p.id and n."nodeType"='requirement' and n.artifact='performance-test-content.json'))`);
         for (const item of projects.rows) await indexProject(db, item.id, item.workspacePath)
     } catch (error) {
         console.error("Existing project indexing failed", error)
@@ -434,7 +506,7 @@ setTimeout(async () => {
 
 setTimeout(async () => {
     try {
-        const staleRuns = await db.query('select id,"projectId" from "Phase2Run" where status=$1', ["RUNNING"]);
+        const staleRuns = await db.query('select id,"projectId" from "Phase2Run" r where status=$1 and not exists (select 1 from "MatrixPlanningRun" m where m."phase2RunId"=r.id)', ["RUNNING"]);
         for (const run of staleRuns.rows) {
             await db.query(`update "Phase2Run" set status=$1,"opencodeSessionId"=null,"finishedAt"=null,
                 "accumulatedElapsedMs"="accumulatedElapsedMs" + CASE WHEN "attemptStartedAt" IS NULL THEN 0 ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((statement_timestamp() AT TIME ZONE 'UTC') - "attemptStartedAt")) * 1000))::BIGINT END,

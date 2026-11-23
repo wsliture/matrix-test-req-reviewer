@@ -82,6 +82,8 @@ export function saveDownload(blob: Blob, filename: string) {
 
 export type Project = {
     id: string;
+    source?: "MANUAL" | "MATRIX";
+    matrixRunId?: string | null;
     name: string;
     createdAt: string;
     status: string;
@@ -91,7 +93,7 @@ export type Project = {
     runs: Phase2Run[];
     documents: { id: string; name: string; parseStatus?: string; parseError?: string }[]
 };
-export type CurrentUser = { id: string; username: string; role: "ADMIN" | "REVIEWER" | "VIEWER" };
+export type CurrentUser = { id: string; username: string; role: "ADMIN" | "REVIEWER" | "VIEWER"; service?: boolean };
 
 export type DebugTreeNode = {
     name: string;

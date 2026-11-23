@@ -5,6 +5,7 @@ import {
     Controller,
     ExecutionContext,
     Get,
+    ForbiddenException,
     Injectable,
     Post,
     Req,
@@ -14,6 +15,10 @@ import {
 import {PrismaService} from "./prisma.js";
 import {hash, verify} from "argon2";
 import {jwtVerify, SignJWT} from "jose";
+
+import {MATRIX_ENDPOINT, matrixSourceIp, normalizeIp} from "./matrix-settings.js";
+
+const matrixIdentity = {id: "matrix-planning-service", username: "Matrix", role: "VIEWER", service: true} as const;
 
 const secret = () => new TextEncoder().encode(process.env.JWT_SECRET || "development-secret-change-me-now");
 const secureCookies = () => process.env.COOKIE_SECURE?.trim().toLowerCase() === "true";
@@ -28,18 +33,32 @@ const cookieOptions = (path: string, maxAge?: number) => ({
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+    constructor(private db: PrismaService) {}
+
     async canActivate(context: ExecutionContext) {
         const request = context.switchToHttp().getRequest();
-        if (["/auth/login", "/auth/logout"].some(path => request.url?.includes(path))) return true;
+        const route = request.url?.split("?")[0].replace(/\/$/, "");
+        const integration = Reflect.getMetadata(MATRIX_ENDPOINT, context.getClass()) === true;
+        if (request.method === "POST" && ["/api/auth/login", "/api/auth/logout"].includes(route)) return true;
         const token = request.cookies?.access_token;
-        if (!token) throw new UnauthorizedException();
-        try {
-            const {payload} = await jwtVerify(token, secret());
-            request.user = {id: String(payload.sub), role: payload.role};
-            return true
-        } catch {
-            throw new UnauthorizedException("登录已过期")
+        if (token && !integration) {
+            const session = await jwtVerify(token, secret()).catch(() => null);
+            if (session) {
+                request.user = {id: String(session.payload.sub), role: session.payload.role};
+                return true;
+            }
         }
+        const source = matrixSourceIp(request.ip || "", request.headers?.["x-real-ip"],
+            process.env.MATRIX_TRUSTED_PROXY_IPS || "");
+        const setting = await this.db.systemSetting.findUnique({where: {key: "matrixCallbackBase"}});
+        if (setting?.value && source === normalizeIp(new URL(setting.value).hostname)) {
+            if (!integration && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+                throw new ForbiddenException("Matrix 服务身份仅可读取及调用启停接口");
+            }
+            request.user = matrixIdentity;
+            return true;
+        }
+        throw new UnauthorizedException(token && !integration ? "登录已过期" : undefined);
     }
 }
 
@@ -113,6 +132,6 @@ export class AuthController {
     }
 
     @Get("me") me(@Req() req: any) {
-        return this.auth.current(req.user.id)
+        return req.user.service === true ? matrixIdentity : this.auth.current(req.user.id)
     }
 }
