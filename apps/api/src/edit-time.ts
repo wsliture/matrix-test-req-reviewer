@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {BadRequestException, Body, Controller, ForbiddenException, Get, Injectable, Param, Post, Req} from "@nestjs/common";
 import {PrismaService} from "./prisma.js";
 
@@ -62,9 +63,11 @@ export class EditTimeService {
 @Controller("projects/:projectId/edit-time")
 export class EditTimeController {
     constructor(private editTime: EditTimeService) {}
+    @MatrixProjectAccess("projectId")
     @Get() summary(@Param("projectId") projectId: string, @Req() req: any) {
         return this.editTime.summary(projectId, req.user.id)
     }
+    @MatrixProjectAccess("projectId")
     @Post("segments") append(@Param("projectId") projectId: string, @Req() req: any, @Body() body: {segments?: unknown}) {
         return this.editTime.append(projectId, req.user, body?.segments)
     }

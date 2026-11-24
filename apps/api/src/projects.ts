@@ -1,9 +1,11 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {readWithRunClock, withElapsed} from "./run-clock.js";
 import {
     BadRequestException,
     ConflictException,
     Controller,
     Delete,
+    ForbiddenException,
     Get,
     Injectable,
     NotFoundException,
@@ -157,11 +159,13 @@ export class ProjectsController {
         return this.projects.list()
     }
 
+    @MatrixProjectAccess("id")
     @Get(":id") get(@Param("id") id: string) {
         return this.projects.get(id)
     }
 
-    @Delete(":id") remove(@Param("id") id: string) {
+    @Delete(":id") remove(@Param("id") id: string, @Req() req: any) {
+        if (req.user?.role !== "ADMIN") throw new ForbiddenException("仅管理员可以删除项目");
         return this.projects.remove(id)
     }
 

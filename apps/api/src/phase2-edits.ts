@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {BadRequestException, ConflictException, Controller, ForbiddenException, Get, Injectable, Param, Post, Req, Body} from "@nestjs/common";
 import {Queue} from "bullmq";
 import {Redis} from "ioredis";
@@ -209,17 +210,24 @@ export class Phase2EditsService {
 @Controller()
 export class Phase2EditsController {
     constructor(private edits: Phase2EditsService) {}
+    @MatrixProjectAccess("projectId")
     @Get("projects/:projectId/phase2-editor/:nodeId") describe(@Param("projectId") projectId: string, @Param("nodeId") nodeId: string) {
         return this.edits.describe(projectId, nodeId)
     }
+    @MatrixProjectAccess("projectId")
     @Post("projects/:projectId/phase2-edits") create(@Param("projectId") projectId: string, @Req() req: any, @Body() body: any) {
         return this.edits.create(projectId, req.user, body)
     }
+    @MatrixProjectAccess("projectId")
     @Get("projects/:projectId/phase2-editor-inline") inlineDescribe(@Param("projectId") projectId: string) { return this.edits.inlineDescribe(projectId) }
+    @MatrixProjectAccess("projectId")
     @Post("projects/:projectId/phase2-edits/batch") createBatch(@Param("projectId") projectId: string, @Req() req: any, @Body() body: any) {
         return this.edits.createBatch(projectId, req.user, body)
     }
+    @MatrixProjectAccess("runId", "editRun")
     @Get("phase2-edit-runs/:runId") get(@Param("runId") runId: string) { return this.edits.get(runId) }
+    @MatrixProjectAccess("runId", "editRun")
     @Post("phase2-edit-runs/:runId/retry") retry(@Param("runId") runId: string, @Req() req: any) { return this.edits.retry(runId, req.user) }
+    @MatrixProjectAccess("runId", "editRun")
     @Post("phase2-edit-runs/:runId/discard") discard(@Param("runId") runId: string, @Req() req: any) { return this.edits.discard(runId, req.user) }
 }

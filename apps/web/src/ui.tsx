@@ -1,3 +1,5 @@
+import {useContext} from "react";
+import {ProjectIdentity} from "./projectIdentity";
 import {useProjectPageTitle} from "./projectPageTitle";
 import {BrowseButton, BrowseLink, reviewHref, resolveReviewLocation} from "./navigation";
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
@@ -165,6 +167,7 @@ const projectArchiveHint = "上传仅包含DOCX源文档的ZIP压缩包";
 const projectHeadingHint = '所有的DOCX文档标题的样式都必须改为 "标题1", "标题2", "标题N"';
 
 function Projects() {
+    const administrator = useQueryClient().getQueryData<CurrentUser>(["me"])?.role === "ADMIN";
     const [pendingProject, setPendingProject] = useState<{name: string; file: File} | null>(null);
     const creatingProject = useRef(false);
     const qc = useQueryClient(), nav = useNavigate(), query = useQuery({
@@ -207,7 +210,7 @@ function Projects() {
                                                                                                  data-project-action
                                                                                                  onClick={event => event.stopPropagation()}>
                                                                                                  <Space><Status
-                                                                                                     value={p.status}/><Popconfirm
+                                                                                                     value={p.status}/>{administrator && <Popconfirm
                                                                                                      title="删除项目"
                                                                                                      description="将永久删除项目、源文档、生成工件和评审记录，是否继续？"
                                                                                                      okText="删除"
@@ -218,7 +221,7 @@ function Projects() {
                                                                                                      icon={
                                                                                                          <DeleteOutlined/>}
                                                                                                      loading={remove.isPending && remove.variables === p.id}
-                                                                                                     onClick={event => event.stopPropagation()}/></Popconfirm></Space>
+                                                                                                     onClick={event => event.stopPropagation()}/></Popconfirm>}</Space>
                                                                                              </div>}>
         <p>创建时间：{localMinute(p.createdAt)}</p><ProjectActivity activity={p.currentActivity}/></Card></Col>)}</Row><Modal open={open} title="新建项目"
         okText="创建项目" cancelText="取消" confirmLoading={upload.isPending}
@@ -510,7 +513,7 @@ function ChapterStatus({project, run, beforeLeave}: { project: Project; run?: Ph
 
 function ProjectPage() {
     const {id = ""} = useParams(), [projectParams] = useSearchParams(), qc = useQueryClient(),
-        user = qc.getQueryData<CurrentUser>(["me"]), [debugOpen, setDebugOpen] = useState(projectParams.has("debugFile")),
+        projectIdentity = useContext(ProjectIdentity), user = qc.getQueryData<CurrentUser>(["me"]) ?? projectIdentity, [debugOpen, setDebugOpen] = useState(projectParams.has("debugFile")),
         [debugDirty, setDebugDirty] = useState(false), projectContentRef = useRef<HTMLDivElement>(null),
         pendingContentScrollRef = useRef<number | undefined>(undefined),
         runLogScrollPositionsRef = useRef<Map<string, number>>(new Map()), query = useQuery({
@@ -602,7 +605,7 @@ function ProjectPage() {
             <p>当前阶段：{latest?.status === "CANCELLED" ? "已终止" : latest?.currentStage ? stageName(latest.currentStage) : running ? "任务启动中" : latest?.status === "FAILED" ? "生成失败" : "尚未开始"}
                 {running && ((latest?.attemptCount || 0) > 1 || ["resume_queued", "retry_queued", "resume_check_artifacts"].includes(latest?.currentStage || "")) &&
                     <Tag color="blue" style={{marginLeft: 8}}>续跑累计进度 {latest?.progress || 0}%</Tag>}</p>
-            <Space className="phase2-run-actions"><Button type="primary"
+            {!user?.service && <Space className="phase2-run-actions"><Button type="primary"
                 loading={run.isPending} disabled={running || (matrixManaged && latest.status === "CANCELLED")}
                 onClick={() => run.mutate({latest, enabled: autoRetry})}>{runLabel}</Button>
             <Checkbox checked={autoRetry} disabled={matrixManaged || updateAutoRetry.isPending} onChange={event => {
@@ -615,7 +618,7 @@ function ProjectPage() {
                                               okText="终止" cancelText="继续运行" okButtonProps={{danger: true}}
                                               onConfirm={() => cancel.mutate(latest.id)}><Button danger
                                                                                                  icon={<StopOutlined/>}
-                                                                                                 loading={cancel.isPending}>终止生成</Button></Popconfirm>}</Space>
+                                                                                                 loading={cancel.isPending}>终止生成</Button></Popconfirm>}</Space>}
             {latest?.errorMessage && ["FAILED", "RUNNING", "QUEUED"].includes(latest.status) && <Alert className="phase2-run-feedback" type={latest.status === "FAILED" ? "error" : "warning"} showIcon
                 message={latest.status === "FAILED" ? "测试需求生成失败" : "上次执行失败，正在重试"} description={latest.errorMessage}/>}
             {latest?.status === "CANCELLED" && <Alert className="phase2-run-feedback" type="info" showIcon
@@ -789,7 +792,8 @@ function Review() {
     const acknowledgedSavedRun = useRef<string | undefined>(undefined);
     const restoredRequirement = useRef<string | undefined>(undefined);
     const restoredSource = useRef<string | undefined>(undefined);
-    const currentUser = qc.getQueryData<CurrentUser>(["me"]);
+    const projectIdentity = useContext(ProjectIdentity);
+    const currentUser = qc.getQueryData<CurrentUser>(["me"]) ?? projectIdentity;
     useEffect(() => {
         const runId = data.data?.generation?.runId, status = data.data?.generation?.status;
         if (!runId || !(["QUEUED", "RUNNING"] as string[]).includes(status || "")) return;
@@ -1746,30 +1750,43 @@ export function App() {
     const location = useLocation(), nav = useNavigate(), qc = useQueryClient();
     const currentPath = `${location.pathname}${location.search}${location.hash}`;
     const [expiredPath, setExpiredPath] = useState<string>();
-    const me = useQuery({queryKey: ["me"], queryFn: async () => {
-        const user = await api<CurrentUser>("/auth/me");
-        if (user.service) throw new ApiError("请登录", 401);
-        return user;
-    }, retry: false,
+    const me = useQuery({queryKey: ["me"], queryFn: () => api<CurrentUser>("/auth/me"), retry: false,
         staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false});
+    const projectId = /^\/projects\/([^/]+)(?:\/(?:review|requirement-diff))?\/?$/.exec(location.pathname)?.[1];
+    const projectIdentity = useQuery({
+        queryKey: ["project-identity", projectId],
+        queryFn: () => api<CurrentUser>(`/auth/projects/${projectId}`),
+        enabled: Boolean(projectId && !me.isLoading && !me.data),
+        retry: false
+    });
+    const guest = projectId && !me.data && projectIdentity.data?.service ? projectIdentity.data : undefined;
     useEffect(() => subscribeToSessionExpired(() => {
+        if (guest) return;
         setExpiredPath(previous => previous || currentPath);
         void qc.cancelQueries();
         qc.removeQueries({predicate: query => query.queryKey[0] !== "me"});
         qc.setQueryData(["me"], null)
-    }), [currentPath, qc]);
-    if (me.isLoading) return <Spin fullscreen/>;
+    }), [currentPath, guest, qc]);
+    if (me.isLoading || projectIdentity.isLoading) return <Spin fullscreen/>;
+    if (projectId && !me.data && projectIdentity.error &&
+        !(projectIdentity.error instanceof ApiError && projectIdentity.error.status === 401)) {
+        return <Result status="error" title="无法验证项目访问" subTitle={projectIdentity.error.message}/>;
+    }
     const initialSessionExpired = location.pathname !== "/login" && me.error instanceof ApiError && me.error.status === 401;
-    if (expiredPath || initialSessionExpired) {
+    if (!guest && (expiredPath || initialSessionExpired)) {
         const returnTo = expiredPath || currentPath;
         return <SessionExpired onLogin={() => {
             setExpiredPath(undefined);
             nav("/login", {replace: true, state: {returnTo}})
         }}/>
     }
-    return <Routes><Route path="/login" element={<Login/>}/><Route path="/" element={me.data ? <Projects/> :
-        <Navigate to="/login"/>}/><Route path="/projects/:id"
-                                         element={me.data ? <ProjectPage/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/review" element={me.data ? <Review/> : <Navigate to="/login"/>}/><Route
-        path="/projects/:id/requirement-diff" element={me.data ? <Shell hideHeader><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/></Routes>
+    const projectAccess = Boolean(me.data || guest);
+    return <ProjectIdentity.Provider value={guest}><Routes>
+        <Route path="/login" element={<Login/>}/>
+        <Route path="/" element={me.data ? <Projects/> : <Navigate to="/login"/>}/>
+        <Route path="/projects/:id" element={projectAccess ? <ProjectPage/> : <Navigate to="/login"/>}/>
+        <Route path="/projects/:id/review" element={projectAccess ? <Review/> : <Navigate to="/login"/>}/>
+        <Route path="/projects/:id/requirement-diff"
+            element={projectAccess ? <Shell hideHeader><RequirementDiffPage/></Shell> : <Navigate to="/login"/>}/>
+    </Routes></ProjectIdentity.Provider>;
 }

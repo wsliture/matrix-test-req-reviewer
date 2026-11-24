@@ -26,7 +26,7 @@ function MatrixSettings() {
         }
     });
     return <Form form={form} layout="vertical" onValuesChange={() => save.reset()} onFinish={value => save.mutate(value)}>
-        <Form.Item name="callbackBase" label="Matrix 回调基地址">
+        <Form.Item name="callbackBase" label="Matrix 回调基地址" extra="用于投递进度和结果。留空会暂停回调。">
             <Input placeholder="http://192.168.4.20:8080/jeecg-boot" disabled={!query.isSuccess || save.isPending}/>
         </Form.Item>
         {query.error && <Alert type="error" showIcon message={query.error.message}/>}

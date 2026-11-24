@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {ConflictException, Controller, Get, NotFoundException, Param, Res} from "@nestjs/common";
 import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
@@ -221,6 +222,7 @@ export class ExportsController {
     constructor(private db: PrismaService) {
     }
 
+    @MatrixProjectAccess("id")
     @Get(":id/test-requirements-docx") async testRequirements(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id),
             publishedReportDirectory = path.resolve(project.workspacePath, ".matrix", "reports");
@@ -255,6 +257,7 @@ export class ExportsController {
         })
     }
 
+    @MatrixProjectAccess("id")
     @Get(":id/review-report") async reviewReport(@Param("id") id: string, @Res() reply: any) {
         const project = await this.project(id);
         if (project.status === "REBUILDING") throw new ConflictException("项目正在重建，暂不能导出评审报告");

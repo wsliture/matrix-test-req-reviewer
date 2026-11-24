@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {readWithRunClock, withElapsed} from "./run-clock.js";
 import {BadRequestException, Body, ConflictException, Controller, Get, Injectable, MessageEvent, Param, Patch, Post, Query, Sse} from "@nestjs/common";
 import {Queue} from "bullmq";
@@ -234,10 +235,12 @@ export class RunsController {
         return this.runs.create(id, body.autoRetry === undefined ? true : body.autoRetry)
     }
 
+    @MatrixProjectAccess("id", "run")
     @Get(":id") get(@Param("id") id: string) {
         return this.runs.get(id)
     }
 
+    @MatrixProjectAccess("id", "run")
     @Get(":id/event-history") eventHistory(@Param("id") id: string, @Query("after") after?: string,
                                             @Query("limit") limit?: string) {
         return this.runs.eventHistory(id, after, limit)
@@ -255,6 +258,7 @@ export class RunsController {
         return this.runs.setAutoRetry(id, body?.autoRetry)
     }
 
+    @MatrixProjectAccess("id", "run")
     @Sse(":id/events") events(@Param("id") id: string) {
         return this.runs.events(id)
     }

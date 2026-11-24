@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {BadRequestException, Body, ConflictException, Controller, Get, Param, Post, Req} from "@nestjs/common";
 import {PrismaService} from "./prisma.js";
 
@@ -21,10 +22,12 @@ export class ReviewsController {
     constructor(private db: PrismaService) {
     }
 
+    @MatrixProjectAccess("projectId")
     @Get() list(@Param("projectId") projectId: string) {
         return this.db.review.findMany({where: {projectId, invalidatedAt: null}, orderBy: {createdAt: "desc"}})
     }
 
+    @MatrixProjectAccess("projectId")
     @Post() async save(@Param("projectId") projectId: string, @Req() req: any, @Body() body: {
         nodeId: string;
         scores: ReviewScores;

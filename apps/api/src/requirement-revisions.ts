@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {BadRequestException, ConflictException, Controller, Get, Injectable, NotFoundException, Param, Query, Req, Res} from "@nestjs/common";
 import {Prisma} from "@prisma/client";
 import {createHash, randomUUID} from "node:crypto";
@@ -256,10 +257,16 @@ export class RequirementRevisionsService {
 @Controller("projects/:projectId")
 export class RequirementRevisionsController {
     constructor(private revisions: RequirementRevisionsService) {}
+    @MatrixProjectAccess("projectId")
     @Get("requirement-revisions") list(@Param("projectId") projectId: string, @Req() req: any) { return this.revisions.list(projectId, req.user?.id) }
+    @MatrixProjectAccess("projectId")
     @Get("requirement-revisions/:revisionId") get(@Param("projectId") projectId: string, @Param("revisionId") revisionId: string) { return this.revisions.get(projectId, revisionId) }
+    @MatrixProjectAccess("projectId")
     @Get("requirement-revisions/:revisionId/document") document(@Param("projectId") projectId: string, @Param("revisionId") revisionId: string) { return this.revisions.document(projectId, revisionId) }
+    @MatrixProjectAccess("projectId")
     @Get("requirement-revisions/:revisionId/docx") docx(@Param("projectId") projectId: string, @Param("revisionId") revisionId: string, @Req() req: any, @Res() reply: FastifyReply) { return this.revisions.download(projectId, revisionId, req.user?.id, reply) }
+    @MatrixProjectAccess("projectId")
     @Get("requirement-diff") diff(@Param("projectId") projectId: string, @Query("from") from: string | undefined, @Query("to") to: string | undefined, @Req() req: any) { return this.revisions.diff(projectId, from, to, req.user?.id) }
+    @MatrixProjectAccess("projectId")
     @Get("requirements/:entityUid/history") history(@Param("projectId") projectId: string, @Param("entityUid") uid: string, @Req() req: any) { return this.revisions.history(projectId, uid, req.user?.id) }
 }

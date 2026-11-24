@@ -1,14 +1,14 @@
 # Matrix 测试策划工具联调
 
-部署含新迁移的 API、Worker 和 Web。用管理员登录，在「设置 → Matrix 对接」保存回调基地址，例如 `http://192.168.4.20:8086/jeecg-boot`。回调基地址填写 Worker 能访问的 Matrix 地址。Nginx 或 API 看到的 Matrix 启停请求来源 IP 必须与回调基地址中的 IP 一致。内网独立部署时，Matrix 访问 requirements-manager 宿主机发布的 Web 端口，Worker 访问 Matrix 发布的回调端口。两边可部署在不同主机和 Docker 网络。
+部署含新迁移的 API、Worker 和 Web。用管理员登录，在「设置 → Matrix 对接」保存 Worker 能访问的回调基地址，例如 `http://192.168.4.20:8086/jeecg-boot`。地址留空时暂停进度和结果回调。Matrix 与 requirements-manager 可部署在不同主机及网络。
 
-Windows Docker Desktop 本机联调时，来源可能被转发为 Docker 网关 IP，回调则需要使用 Worker 可达的 Windows 宿主机 IP。如果这两个 IP 不同，启停会返回 HTTP 401。可将模拟器放到能被 Worker 回调、且源 IP 可直接识别的同一联调网络中。
+启动和停止接口无需登录。浏览器可以直接打开或通过 iframe 嵌入 Matrix 项目的详情、需求工作台和版本比较，进行评分、编辑和下载。可访问服务且持有项目链接的用户都具有这些权限。匿名操作归入「Matrix 匿名访问」系统账号。
 
-浏览器访问项目详情时按正常流程登录。
+项目列表和手动创建的项目需要登录。删除项目仅限管理员。
 
 在 Matrix 注册 `planning`，工具地址填 requirements-manager Web 基地址，启动和停止路径分别为 `/api/start` 和 `/api/stop`。使用默认 Web 路由时留空 `jumpPath`，工具返回 `/projects/<内部项目ID>`。
 
-默认 Compose 和离线 ARM64 Compose 都给内置 Nginx 配置了专用代理网络。出现子网冲突时，在环境配置中同时调整 `MATRIX_WEB_PROXY_SUBNET`、`MATRIX_WEB_PROXY_IP` 和 `MATRIX_API_PROXY_IP`，确保 Web 和 API 的固定地址不同且在同一个子网。自定义部署若使用反向代理，设置 `MATRIX_TRUSTED_PROXY_IPS` 为直接连接 API 的可信代理 IP，多个地址用逗号隔开，并让该代理覆盖 `X-Real-IP`。直连时无需配置代理。符合来源 IP 的无 Cookie 请求以只读身份访问 API，启停接口也使用这个来源检查。
+默认 Compose 和离线 ARM64 Compose 都给内置 Nginx 配置了专用代理网络。出现子网冲突时，在环境配置中同时调整 `MATRIX_WEB_PROXY_SUBNET`、`MATRIX_WEB_PROXY_IP` 和 `MATRIX_API_PROXY_IP`，确保 Web 和 API 的固定地址不同且在同一个子网。
 
 在 Matrix 测试机上运行以下命令。先启动监听器，再在另一个终端发起生成。为验证成功路径，等待监听器打印 `completed` 并打开详情页。为验证取消路径，使用另一个 `run-id` 发起生成后立即调用 stop。
 

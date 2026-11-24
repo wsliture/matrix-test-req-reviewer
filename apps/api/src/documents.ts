@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {Controller, Get, NotFoundException, Param, Res} from "@nestjs/common";
 import {createReadStream} from "node:fs";
 import {access} from "node:fs/promises";
@@ -8,6 +9,7 @@ export class DocumentsController {
     constructor(private db: PrismaService) {
     }
 
+    @MatrixProjectAccess("id", "document")
     @Get(":id/file") async file(@Param("id") id: string, @Res() reply: any) {
         const document = await this.db.document.findUnique({where: {id}});
         if (!document) throw new NotFoundException("文档不存在");

@@ -1,9 +1,8 @@
 import {describe, expect, it, vi} from "vitest";
-import {AuthGuard} from "../src/auth.js";
 import {SettingsController} from "../src/settings.js";
-import {MATRIX_ENDPOINT, matrixSourceIp, normalizeMatrixAddress} from "../src/matrix-settings.js";
+import {normalizeMatrixAddress} from "../src/matrix-settings.js";
 
-describe("Matrix IP-based access", () => {
+describe("Matrix callback address", () => {
     it("accepts literal IPv4 and IPv6 with callback prefixes", () => {
         expect(normalizeMatrixAddress(" http://192.0.2.4:8086/jeecg-boot/ ")).toBe("http://192.0.2.4:8086/jeecg-boot");
         expect(normalizeMatrixAddress("https://[2001:0db8::1]/")).toBe("https://[2001:db8::1]");
@@ -15,14 +14,10 @@ describe("Matrix IP-based access", () => {
         expect(() => normalizeMatrixAddress(address)).toThrow();
     });
 
-    it("uses the socket address unless the exact proxy peer is trusted", () => {
-        expect(matrixSourceIp("::ffff:192.0.2.3", "192.0.2.5", "192.0.2.4")).toBe("192.0.2.3");
-        expect(matrixSourceIp("::ffff:c000:204", "192.0.2.5", "192.0.2.4")).toBe("192.0.2.5");
-        expect(matrixSourceIp("192.0.2.4", "192.0.2.5, 192.0.2.6", "192.0.2.4")).toBe("");
-    });
+
 });
 
-it("authorizes Matrix starts and stops using only the saved callback IP", async () => {
+it("stores the normalized callback address", async () => {
     const settings = new Map([["matrixStartStopIp", "192.0.2.9"]]);
     const findUnique = vi.fn(async ({where}: {where: {key: string}}) => {
         const value = settings.get(where.key);
@@ -40,26 +35,8 @@ it("authorizes Matrix starts and stops using only the saved callback IP", async 
         .toEqual({callbackBase: "http://192.0.2.5:8086/prefix"});
     expect(await controller.getMatrix(admin)).toEqual({callbackBase: "http://192.0.2.5:8086/prefix"});
 
-    const guard = new AuthGuard(db as any);
-    class Integration {}
-    Reflect.defineMetadata(MATRIX_ENDPOINT, true, Integration);
-    const request = (route: string, ip: string, forwarded?: string) => guard.canActivate({
-        getClass: () => Integration,
-        switchToHttp: () => ({getRequest: () => ({
-            method: "POST", url: "/api/" + route, ip, headers: {"x-real-ip": forwarded}
-        })})
-    } as any);
-    vi.stubEnv("MATRIX_TRUSTED_PROXY_IPS", "192.0.2.2");
-    try {
-        await expect(request("start", "192.0.2.5")).resolves.toBe(true);
-        await expect(request("stop", "192.0.2.2", "192.0.2.5")).resolves.toBe(true);
-        await expect(request("start", "192.0.2.9", "192.0.2.5")).rejects.toThrow("Unauthorized");
-        await expect(request("start", "192.0.2.2", "192.0.2.9")).rejects.toThrow("Unauthorized");
-        await controller.updateMatrix(admin, {callbackBase: ""});
-        await expect(request("stop", "192.0.2.5")).rejects.toThrow("Unauthorized");
-        expect(findUnique.mock.calls.every(([{where}]) => where.key === "matrixCallbackBase")).toBe(true);
-        expect(settings.get("matrixStartStopIp")).toBe("192.0.2.9");
-    } finally {
-        vi.unstubAllEnvs();
-    }
+    await controller.updateMatrix(admin, {callbackBase: ""});
+    expect(await controller.getMatrix(admin)).toEqual({callbackBase: ""});
+    expect(findUnique.mock.calls.every(([{where}]) => where.key === "matrixCallbackBase")).toBe(true);
+    expect(settings.get("matrixStartStopIp")).toBe("192.0.2.9");
 });

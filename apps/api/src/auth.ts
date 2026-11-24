@@ -5,7 +5,6 @@ import {
     Controller,
     ExecutionContext,
     Get,
-    ForbiddenException,
     Injectable,
     Post,
     Req,
@@ -16,9 +15,9 @@ import {PrismaService} from "./prisma.js";
 import {hash, verify} from "argon2";
 import {jwtVerify, SignJWT} from "jose";
 
-import {MATRIX_ENDPOINT, matrixSourceIp, normalizeIp} from "./matrix-settings.js";
-
-const matrixIdentity = {id: "matrix-planning-service", username: "Matrix", role: "VIEWER", service: true} as const;
+import {MATRIX_ENDPOINT} from "./matrix-settings.js";
+import {MATRIX_ANONYMOUS_USER, MATRIX_ANONYMOUS_USER_ID, MATRIX_PROJECT_ACCESS, MatrixProjectAccess,
+    type MatrixResource} from "./matrix-project-access.js";
 
 const secret = () => new TextEncoder().encode(process.env.JWT_SECRET || "development-secret-change-me-now");
 const secureCookies = () => process.env.COOKIE_SECURE?.trim().toLowerCase() === "true";
@@ -39,26 +38,37 @@ export class AuthGuard implements CanActivate {
         const request = context.switchToHttp().getRequest();
         const route = request.url?.split("?")[0].replace(/\/$/, "");
         const integration = Reflect.getMetadata(MATRIX_ENDPOINT, context.getClass()) === true;
+        if (integration) return true;
         if (request.method === "POST" && ["/api/auth/login", "/api/auth/logout"].includes(route)) return true;
         const token = request.cookies?.access_token;
-        if (token && !integration) {
+        if (token) {
             const session = await jwtVerify(token, secret()).catch(() => null);
-            if (session) {
+            if (session && session.payload.sub !== MATRIX_ANONYMOUS_USER_ID) {
                 request.user = {id: String(session.payload.sub), role: session.payload.role};
                 return true;
             }
         }
-        const source = matrixSourceIp(request.ip || "", request.headers?.["x-real-ip"],
-            process.env.MATRIX_TRUSTED_PROXY_IPS || "");
-        const setting = await this.db.systemSetting.findUnique({where: {key: "matrixCallbackBase"}});
-        if (setting?.value && source === normalizeIp(new URL(setting.value).hostname)) {
-            if (!integration && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-                throw new ForbiddenException("Matrix 服务身份仅可读取及调用启停接口");
+        const access = Reflect.getMetadata(MATRIX_PROJECT_ACCESS, context.getHandler()) as
+            {param: string; resource: MatrixResource} | undefined;
+        if (access) {
+            const id = request.params?.[access.param];
+            if (typeof id === "string" && await this.isMatrixProject(id, access.resource)) {
+                request.user = MATRIX_ANONYMOUS_USER;
+                return true;
             }
-            request.user = matrixIdentity;
-            return true;
         }
-        throw new UnauthorizedException(token && !integration ? "登录已过期" : undefined);
+        throw new UnauthorizedException(token ? "登录已过期" : undefined);
+    }
+
+    private async isMatrixProject(id: string, resource: MatrixResource) {
+        const project = {source: "MATRIX" as const};
+        const select = {id: true};
+        switch (resource) {
+            case "project": return this.db.project.findFirst({where: {id, ...project}, select});
+            case "document": return this.db.document.findFirst({where: {id, project}, select});
+            case "run": return this.db.phase2Run.findFirst({where: {id, project}, select});
+            case "editRun": return this.db.phase2EditRun.findFirst({where: {id, project}, select});
+        }
     }
 }
 
@@ -74,7 +84,7 @@ export class AuthService {
 
     async login(username: string, password: string) {
         const user = await this.db.user.findUnique({where: {username}});
-        if (!user || !await verify(user.passwordHash, password)) throw new UnauthorizedException("用户名或密码错误");
+        if (!user || user.id === MATRIX_ANONYMOUS_USER_ID || !await verify(user.passwordHash, password)) throw new UnauthorizedException("用户名或密码错误");
         return {
             user: {id: user.id, username: user.username, role: user.role},
             access: await this.signAccessToken(user)
@@ -89,6 +99,7 @@ export class AuthService {
     }
 
     async changePassword(userId: string, currentPassword: string, newPassword: string) {
+        if (userId === MATRIX_ANONYMOUS_USER_ID) throw new UnauthorizedException();
         if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 128) {
             throw new BadRequestException("新密码长度必须为8至128个字符")
         }
@@ -131,7 +142,13 @@ export class AuthController {
         return result
     }
 
+    @Get("projects/:projectId")
+    @MatrixProjectAccess("projectId")
+    projectIdentity(@Req() req: any) {
+        return req.user.service ? MATRIX_ANONYMOUS_USER : this.auth.current(req.user.id);
+    }
+
     @Get("me") me(@Req() req: any) {
-        return req.user.service === true ? matrixIdentity : this.auth.current(req.user.id)
+        return this.auth.current(req.user.id)
     }
 }

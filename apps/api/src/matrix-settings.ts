@@ -15,20 +15,3 @@ export function normalizeMatrixAddress(value: unknown): string {
     }
     return address.href.replace(/\/+$/, "");
 }
-
-export function normalizeIp(value: string): string {
-    const ip = value.replace(/^\[|\]$/g, "").toLowerCase();
-    if (ip.startsWith("::ffff:") && isIP(ip.slice(7)) === 4) return ip.slice(7);
-    if (isIP(ip) !== 6) return ip;
-    const canonical = new URL(`http://[${ip}]`).hostname.slice(1, -1);
-    const mapped = /^::ffff:([\da-f]+):([\da-f]+)$/.exec(canonical);
-    if (!mapped) return canonical;
-    const [high, low] = mapped.slice(1).map(part => parseInt(part, 16));
-    return [high >> 8, high & 255, low >> 8, low & 255].join(".");
-}
-
-export function matrixSourceIp(peer: string, forwarded: unknown, trusted: string): string {
-    const source = normalizeIp(peer);
-    if (!trusted.split(",").map(ip => normalizeIp(ip.trim())).includes(source)) return source;
-    return typeof forwarded === "string" && isIP(forwarded) ? normalizeIp(forwarded) : "";
-}

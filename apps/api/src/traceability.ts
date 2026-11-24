@@ -1,3 +1,4 @@
+import {MatrixProjectAccess} from "./matrix-project-access.js";
 import {Controller, Get, Injectable, NotFoundException, Param, Query} from "@nestjs/common";
 import {PrismaService} from "./prisma.js";
 import {buildPhase2Document} from "./phase2-document.js";
@@ -66,10 +67,12 @@ export class TraceabilityController {
     constructor(private traceability: TraceabilityService) {
     }
 
+    @MatrixProjectAccess("projectId")
     @Get("review-data") reviewData(@Param("projectId") projectId: string) {
         return this.traceability.reviewData(projectId)
     }
 
+    @MatrixProjectAccess("projectId")
     @Get("trace-links") links(@Param("projectId") projectId: string, @Query("sourceNodeId") sourceNodeId: string,
                               @Query("includeDescendants") includeDescendants?: string) {
         return this.traceability.links(projectId, sourceNodeId, includeDescendants !== "false")

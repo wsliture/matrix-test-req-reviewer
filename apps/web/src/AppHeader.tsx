@@ -1,10 +1,11 @@
 import {BrowseButton, BrowseLink} from "./navigation";
-import {useState, type ReactNode} from "react";
+import {useContext, useState, type ReactNode} from "react";
 import {Avatar, Button, Dropdown, Layout, Tooltip} from "antd";
 import {ArrowLeftOutlined, CodeOutlined, KeyOutlined, LogoutOutlined, QuestionCircleOutlined, UserAddOutlined, UserOutlined} from "@ant-design/icons";
 import {useQueryClient} from "@tanstack/react-query";
 import {useLocation, useNavigate} from "react-router-dom";
 import {api, type CurrentUser} from "./api";
+import {ProjectIdentity} from "./projectIdentity";
 import {SettingsModal, type SettingsTab} from "./SettingsModal";
 
 export function HeaderBrand({beforeLeave}: {beforeLeave?: () => boolean}) {
@@ -25,7 +26,8 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
     actions?: ReactNode;
     beforeLeave?: () => boolean
 }) {
-    const navigate = useNavigate(), queryClient = useQueryClient(), user = queryClient.getQueryData<CurrentUser>(["me"]),
+    const projectIdentity = useContext(ProjectIdentity);
+    const navigate = useNavigate(), queryClient = useQueryClient(), user = queryClient.getQueryData<CurrentUser>(["me"]) ?? projectIdentity,
         [settingsOpen, setSettingsOpen] = useState(false), [settingsTab, setSettingsTab] = useState<SettingsTab>("password"),
         roleName = user?.role === "ADMIN" ? "管理员" : user?.role === "REVIEWER" ? "评审员" : "查看者";
     const openSettings = (tab: SettingsTab) => {
@@ -52,7 +54,7 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
         <Button ghost shape="circle" aria-label="下载使用手册" icon={<QuestionCircleOutlined/>}
                 href="/manuals/Matrix-Req-Manager用户使用手册.pdf"
                 download="SunwiseMatriX TR用户使用手册.pdf"/>
-    </Tooltip><Dropdown placement="bottomRight" trigger={["click"]} menu={{
+    </Tooltip>{user?.service ? <span>{user.username}</span> : <Dropdown placement="bottomRight" trigger={["click"]} menu={{
         items: [{key: "account", disabled: true, label: <div className="account-menu-summary">
             <b>{user?.username || "当前用户"}</b><span>{roleName}</span>
         </div>}, {type: "divider"}, ...settingsItems, {type: "divider"},
@@ -63,6 +65,6 @@ export function AppHeader({backTo, backLabel = "返回项目", actions, beforeLe
         }
     }}><Button ghost shape="circle" className="account-menu-trigger" aria-label="用户菜单">
         <Avatar size={30} icon={<UserOutlined/>}/>
-    </Button></Dropdown></Layout.Header><SettingsModal open={settingsOpen} activeTab={settingsTab} user={user}
+    </Button></Dropdown>}</Layout.Header><SettingsModal open={settingsOpen} activeTab={settingsTab} user={user}
         onTabChange={setSettingsTab} onClose={() => setSettingsOpen(false)} beforeLeave={beforeLeave}/></>
 }
